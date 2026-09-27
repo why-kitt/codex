@@ -1,0 +1,84 @@
+{
+  "name": "reconnect",
+  "description": "Adds the [reconnect] config table: fixed or default reconnect interval, and a stream retry budget override.",
+  "edits": [
+    {
+      "file": "codex-rs/config/src/config_toml.rs",
+      "find": "    pub feedback: Option<FeedbackConfigToml>,\n\n    /// Settings for app-specific controls.\n",
+      "replace": "    pub feedback: Option<FeedbackConfigToml>,\n\n    /// Overrides for model stream reconnect timing and retry budget.\n    pub reconnect: Option<ReconnectConfigToml>,\n\n    /// Settings for app-specific controls.\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/config/src/config_toml.rs",
+      "find": "    /// Preferred OSS provider for local models, e.g. \"lmstudio\" or \"ollama\".\n    pub oss_provider: Option<String>,\n}\n\n#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]\n#[serde(tag = \"type\", rename_all = \"snake_case\")]\npub enum ThreadStoreToml {\n",
+      "replace": "    /// Preferred OSS provider for local models, e.g. \"lmstudio\" or \"ollama\".\n    pub oss_provider: Option<String>,\n}\n\n/// Selects the delay schedule used between model stream reconnect attempts.\n#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]\n#[serde(rename_all = \"snake_case\")]\npub enum ReconnectMode {\n    /// Exponential backoff with jitter, matching the built-in behavior.\n    #[default]\n    Default,\n    /// Sleep for a constant `interval_ms` on every attempt.\n    Fixed,\n}\n\n/// Reconnect overrides for model stream retries.\n#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]\n#[schemars(deny_unknown_fields)]\npub struct ReconnectConfigToml {\n    /// Delay schedule between reconnect attempts. Defaults to `default`.\n    #[serde(default)]\n    pub mode: ReconnectMode,\n\n    /// Constant delay in milliseconds; only used when `mode = \"fixed\"`.\n    pub interval_ms: Option<u64>,\n\n    /// Overrides the provider's `stream_max_retries` budget for this run.\n    pub max_retries: Option<u64>,\n}\n\n#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]\n#[serde(tag = \"type\", rename_all = \"snake_case\")]\npub enum ThreadStoreToml {\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/core/src/config/mod.rs",
+      "find": "use codex_config::config_toml::RealtimeConfig;\nuse codex_config::config_toml::ThreadStoreToml;\n",
+      "replace": "use codex_config::config_toml::RealtimeConfig;\nuse codex_config::config_toml::ReconnectConfigToml;\nuse codex_config::config_toml::ReconnectMode;\nuse codex_config::config_toml::ThreadStoreToml;\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/core/src/config/mod.rs",
+      "find": "    pub feedback_enabled: bool,\n\n    /// Configured discoverable tools for tool suggestions.\n",
+      "replace": "    pub feedback_enabled: bool,\n\n    /// Overrides for model stream reconnect timing and retry budget.\n    pub reconnect: ReconnectConfigToml,\n\n    /// Configured discoverable tools for tool suggestions.\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/core/src/config/mod.rs",
+      "find": "        let model_providers =\n            merge_configured_model_providers(built_in_model_providers(openai_base_url), cfg.model_providers)\n                .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidData, message))?;\n\n        let model_provider_id = config_layer_stack.required_model_provider().map(str::to_string)\n",
+      "replace": "        let model_providers =\n            merge_configured_model_providers(built_in_model_providers(openai_base_url), cfg.model_providers)\n                .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidData, message))?;\n\n        let reconnect = cfg.reconnect.unwrap_or_default();\n        if reconnect.mode == ReconnectMode::Fixed && reconnect.interval_ms.is_none_or(|ms| ms == 0) {\n            return Err(std::io::Error::new(\n                std::io::ErrorKind::InvalidInput,\n                \"reconnect.mode = \\\"fixed\\\" requires reconnect.interval_ms to be greater than zero\",\n            ));\n        }\n        let model_providers = match reconnect.max_retries {\n            Some(max_retries) => model_providers\n                .into_iter()\n                .map(|(id, mut provider)| {\n                    provider.stream_max_retries = Some(max_retries);\n                    (id, provider)\n                })\n                .collect(),\n            None => model_providers,\n        };\n\n        let model_provider_id = config_layer_stack.required_model_provider().map(str::to_string)\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/core/src/config/mod.rs",
+      "find": "            feedback_enabled: cfg\n                .feedback\n                .as_ref()\n                .and_then(|feedback| feedback.enabled)\n                .unwrap_or(true),\n            tool_suggest,\n",
+      "replace": "            feedback_enabled: cfg\n                .feedback\n                .as_ref()\n                .and_then(|feedback| feedback.enabled)\n                .unwrap_or(true),\n            reconnect: cfg.reconnect.unwrap_or_default(),\n            tool_suggest,\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/core/src/responses_retry.rs",
+      "find": "use codex_client::RetryOperation;\nuse codex_features::Feature;\n",
+      "replace": "use codex_client::RetryOperation;\nuse codex_config::config_toml::ReconnectConfigToml;\nuse codex_config::config_toml::ReconnectMode;\nuse codex_features::Feature;\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/core/src/responses_retry.rs",
+      "find": "const INITIAL_CONNECTION_RETRY_DELAY: Duration = Duration::from_secs(5);\nconst MAX_CONNECTION_RETRY_DELAY: Duration = Duration::from_secs(60);\n\n#[derive(Debug, Clone, Copy)]\n",
+      "replace": "const INITIAL_CONNECTION_RETRY_DELAY: Duration = Duration::from_secs(5);\nconst MAX_CONNECTION_RETRY_DELAY: Duration = Duration::from_secs(60);\n\n/// Returns the configured constant delay when `reconnect.mode = \"fixed\"`.\n///\n/// `reconnect.mode = \"fixed\"` is validated to carry a positive `interval_ms` while the\n/// config is loaded, so a zero delay here would only come from a directly constructed\n/// `Config`.\nfn fixed_reconnect_delay(reconnect: &ReconnectConfigToml) -> Option<Duration> {\n    match reconnect.mode {\n        ReconnectMode::Default => None,\n        ReconnectMode::Fixed => Some(Duration::from_millis(\n            reconnect.interval_ms.unwrap_or_default(),\n        )),\n    }\n}\n\n#[derive(Debug, Clone, Copy)]\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/core/src/responses_retry.rs",
+      "find": "    let retry_count = retry_state.retries.saturating_add(1);\n    let Some(delay) = err.retry_delay(retry_count) else {\n        return Err(err);\n    };\n",
+      "replace": "    let retry_count = retry_state.retries.saturating_add(1);\n    let Some(delay) = err.retry_delay(retry_count) else {\n        return Err(err);\n    };\n    let fixed_delay = fixed_reconnect_delay(&turn_context.config.reconnect);\n    if let (Some(fixed), Some(server)) = (fixed_delay, err.server_retry_delay())\n        && server > fixed\n    {\n        warn!(\n            turn_id = %turn_context.sub_id,\n            server_retry_delay = ?server,\n            fixed_retry_delay = ?fixed,\n            \"server asked for a longer retry delay than reconnect.interval_ms; \\\n             reconnect.mode = \\\"fixed\\\" keeps the configured interval\"\n        );\n    }\n    let delay = fixed_delay.unwrap_or(delay);\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/core/src/responses_retry.rs",
+      "find": "        let retry_delay = retry_state.connection_retry_delay;\n",
+      "replace": "        let retry_delay = fixed_delay.unwrap_or(retry_state.connection_retry_delay);\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/core/src/responses_retry.rs",
+      "find": "        tokio::time::sleep(retry_delay).await;\n        retry_state.connection_retry_delay = retry_delay\n            .saturating_mul(2)\n            .min(MAX_CONNECTION_RETRY_DELAY);\n        return Ok(());\n",
+      "replace": "        tokio::time::sleep(retry_delay).await;\n        if fixed_delay.is_none() {\n            retry_state.connection_retry_delay = retry_delay\n                .saturating_mul(2)\n                .min(MAX_CONNECTION_RETRY_DELAY);\n        }\n        return Ok(());\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/core/src/responses_retry.rs",
+      "find": "            retry_at: err\n                .server_retry_delay()\n                .and_then(|delay| tokio::time::Instant::now().checked_add(delay)),\n",
+      "replace": "            retry_at: match fixed_delay {\n                Some(fixed) => tokio::time::Instant::now().checked_add(fixed),\n                None => err\n                    .server_retry_delay()\n                    .and_then(|delay| tokio::time::Instant::now().checked_add(delay)),\n            },\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/model-provider-info/src/lib.rs",
+      "find": "/// Hard cap for user-configured `stream_max_retries`.\nconst MAX_STREAM_MAX_RETRIES: u64 = 100;\n",
+      "replace": "/// Hard cap for user-configured `stream_max_retries`.\nconst MAX_STREAM_MAX_RETRIES: u64 = 10_000;\n",
+      "expect": 1
+    }
+  ]
+}

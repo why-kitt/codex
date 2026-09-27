@@ -1,0 +1,146 @@
+name: Build patched Windows x64
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "openai/codex tag to build (empty = latest release)"
+        required: false
+        default: ""
+      publish_release:
+        description: "Publish a patched-<tag> release on this repository"
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-windows-x64
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build codex.exe
+    runs-on: windows-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+
+      - name: Resolve upstream tag
+        id: resolve
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_TAG}" ]; then
+            tag="${INPUT_TAG}"
+          else
+            tag="$(gh api repos/openai/codex/releases/latest --jq '.tag_name')"
+          fi
+          commit="$(git ls-remote https://github.com/openai/codex.git "refs/tags/${tag}" | cut -f1)"
+          if [ -z "${commit}" ]; then
+            echo "unknown openai/codex tag: ${tag}" >&2
+            exit 1
+          fi
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "commit=${commit}" >> "${GITHUB_OUTPUT}"
+          echo "asset=codex-${tag}-windows-x64" >> "${GITHUB_OUTPUT}"
+          echo "Building openai/codex @ ${tag} (${commit})"
+
+      - name: Checkout openai/codex
+        uses: actions/checkout@v4
+        with:
+          repository: openai/codex
+          ref: ${{ steps.resolve.outputs.tag }}
+          path: codex-src
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Apply patches
+        shell: bash
+        run: python scripts/apply_patches.py --root codex-src
+
+      - name: Record patched diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C codex-src diff > "${{ steps.resolve.outputs.asset }}.patch"
+          echo "patched files:"
+          git -C codex-src --no-pager diff --stat
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: codex-src/codex-rs -> target
+          key: ${{ steps.resolve.outputs.tag }}
+
+      - name: Build codex.exe
+        shell: pwsh
+        working-directory: codex-src/codex-rs
+        env:
+          STABLE_GIT_COMMIT: ${{ steps.resolve.outputs.commit }}
+        run: cargo build --release --locked -p codex-cli --bin codex
+
+      - name: Smoke test codex.exe
+        shell: pwsh
+        working-directory: codex-src/codex-rs
+        run: ./target/release/codex.exe --version
+
+      - name: Package artifacts
+        id: package
+        shell: pwsh
+        run: |
+          $name = "${{ steps.resolve.outputs.asset }}"
+          Copy-Item "codex-src/codex-rs/target/release/codex.exe" "$name.exe"
+          Compress-Archive -Path "$name.exe" -DestinationPath "$name.zip" -Force
+          Get-Item "$name.exe", "$name.zip", "$name.patch" |
+            Select-Object Name, @{n = "MB"; e = { [math]::Round($_.Length / 1MB, 1) }} |
+            Format-Table -AutoSize | Out-String | Write-Host
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-windows-x64
+          path: |
+            ${{ steps.resolve.outputs.asset }}.zip
+            ${{ steps.resolve.outputs.asset }}.patch
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Publish release
+        if: ${{ inputs.publish_release }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release="patched-${{ steps.resolve.outputs.tag }}"
+          zip="${{ steps.resolve.outputs.asset }}.zip"
+          patch="${{ steps.resolve.outputs.asset }}.patch"
+          notes="Patched build of openai/codex ${{ steps.resolve.outputs.tag }} (commit ${{ steps.resolve.outputs.commit }}).
+
+          Adds the [reconnect] config table: mode = default | fixed, interval_ms, max_retries."
+          if gh release view "${release}" >/dev/null 2>&1; then
+            gh release upload "${release}" "${zip}" "${patch}" --clobber
+          else
+            gh release create "${release}" "${zip}" "${patch}" \
+              --title "${release}" \
+              --notes "${notes}"
+          fi
