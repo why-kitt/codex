@@ -22,9 +22,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # Print cargo's periodic "Compiling ... (n/total)" progress even when stdout
-  # is not a TTY, so a slow/hung build is visible in the Actions log.
-  CARGO_TERM_PROGRESS_WHEN: always
 
 jobs:
   build:
