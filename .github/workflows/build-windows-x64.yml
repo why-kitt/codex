@@ -113,6 +113,44 @@ jobs:
           workspaces: codex-src/codex-rs -> target
           key: ${{ steps.resolve.outputs.tag }}
 
+      - name: Print runner specs
+        shell: pwsh
+        run: |
+          $computer = Get-CimInstance Win32_ComputerSystem
+          $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+          Write-Host "CPU: $($cpu.Name) x$($computer.NumberOfLogicalProcessors)"
+          Write-Host "Total RAM: $([math]::Round($computer.TotalPhysicalMemory / 1GB, 1)) GiB"
+          Get-PSDrive -PSProvider FileSystem |
+            Format-Table -AutoSize Name, @{n = "Free(GB)"; e = { [math]::Round($_.Free / 1GB, 1) }} |
+            Out-String | Write-Host
+
+      - name: Exclude build dirs from Windows Defender
+        shell: pwsh
+        run: |
+          # Real-time scanning of the cargo registry and target tree makes
+          # release links crawl on hosted Windows runners.
+          $paths = @($env:GITHUB_WORKSPACE, "$env:USERPROFILE\.cargo", "$env:RUNNER_TEMP")
+          try {
+            Add-MpPreference -ExclusionPath $paths -ErrorAction Stop
+            Write-Host "Defender exclusions added: $($paths -join ', ')"
+          } catch {
+            Write-Host "Could not add Defender exclusions (continuing): $_"
+          }
+
+      - name: Use rust-lld linker (matches upstream release workflow)
+        shell: pwsh
+        run: |
+          # openai/codex rust-release-windows.yml sets
+          # CARGO_TARGET_*_LINKER to rust-lld; MSVC link.exe is far slower on
+          # the 200MB static-CRT codex.exe and can appear to hang for hours.
+          $sysroot = (rustc --print sysroot).Trim()
+          $hostTriple = ((rustc -vV | Select-String '^host: ').Line.Substring(6)).Trim()
+          $lld = Join-Path $sysroot "lib\rustlib\$hostTriple\bin\rust-lld.exe"
+          if (-not (Test-Path $lld)) { throw "rust-lld.exe not found at $lld" }
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$lld" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Using linker: $lld"
+
       - name: Build codex.exe
         shell: pwsh
         # Fail loudly on a hung build well before the job-level 180-minute cap.
@@ -120,13 +158,25 @@ jobs:
         working-directory: codex-src/codex-rs
         env:
           STABLE_GIT_COMMIT: ${{ steps.resolve.outputs.commit }}
+          LIBSQLITE3_FLAGS: SQLITE_DISABLE_INTRINSIC
         run: |
           # Heartbeat: a child pwsh writing straight to this step's stdout, so the
           # log keeps moving even when cargo itself goes quiet for a long time.
-          $beat = Start-Process pwsh -ArgumentList @(
-            '-NoProfile', '-Command',
-            'while ($true) { Write-Output ("[heartbeat {0}]" -f (Get-Date -Format s)); Start-Sleep 300 }'
-          ) -PassThru -NoNewWindow
+          # The loop lives in a script file to avoid Start-Process quoting issues.
+          $beatScript = Join-Path $env:RUNNER_TEMP "heartbeat.ps1"
+          $beatBody = @'
+          while ($true) {
+            $os = Get-CimInstance Win32_OperatingSystem
+            $ram = [math]::Round($os.FreePhysicalMemory / 1024)
+            $rustc = @(Get-Process rustc -ErrorAction SilentlyContinue).Count
+            $link = @(Get-Process link -ErrorAction SilentlyContinue).Count
+            $cargo = @(Get-Process cargo -ErrorAction SilentlyContinue).Count
+            Write-Output ("[heartbeat {0}] ram_free_mb={1} cargo={2} rustc={3} link={4}" -f (Get-Date -Format s), $ram, $cargo, $rustc, $link)
+            Start-Sleep 300
+          }
+          '@
+          Set-Content -Path $beatScript -Value $beatBody
+          $beat = Start-Process pwsh -ArgumentList @("-NoProfile", "-File", $beatScript) -PassThru -NoNewWindow
           try {
             cargo build --release --locked -p codex-cli --bin codex
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
