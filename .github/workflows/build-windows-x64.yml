@@ -85,6 +85,28 @@ jobs:
         with:
           toolchain: "1.95.0"
 
+      - name: Refresh Cargo.lock for the release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Upstream tags ship Cargo.lock with workspace members at 0.0.0 while the
+          # tag's Cargo.toml already carries the release version, so a --locked build
+          # refuses to start. Re-resolve once (member version lines only), then the
+          # build itself stays --locked.
+          cd codex-src/codex-rs
+          cargo metadata --format-version 1 > /dev/null
+          cd ../..
+          changed="$(git --no-pager diff --unified=0 -- codex-src/codex-rs/Cargo.lock \
+            | grep -E '^[+-][^+-]' || true)"
+          unexpected="$(printf '%s\n' "${changed}" | grep -vE '^[+-]version = "[^"]*"$' || true)"
+          if [ -n "${unexpected}" ]; then
+            echo "unexpected Cargo.lock delta, refusing to build:" >&2
+            echo "${unexpected}" >&2
+            exit 1
+          fi
+          echo "Cargo.lock refresh delta:"
+          git --no-pager diff --stat -- codex-src/codex-rs/Cargo.lock
+
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
