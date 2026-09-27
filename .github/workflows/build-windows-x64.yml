@@ -22,6 +22,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Print cargo's periodic "Compiling ... (n/total)" progress even when stdout
+  # is not a TTY, so a slow/hung build is visible in the Actions log.
+  CARGO_TERM_PROGRESS_WHEN: always
 
 jobs:
   build:
@@ -115,10 +118,24 @@ jobs:
 
       - name: Build codex.exe
         shell: pwsh
+        # Fail loudly on a hung build well before the job-level 180-minute cap.
+        timeout-minutes: 140
         working-directory: codex-src/codex-rs
         env:
           STABLE_GIT_COMMIT: ${{ steps.resolve.outputs.commit }}
-        run: cargo build --release --locked -p codex-cli --bin codex
+        run: |
+          # Heartbeat: a child pwsh writing straight to this step's stdout, so the
+          # log keeps moving even when cargo itself goes quiet for a long time.
+          $beat = Start-Process pwsh -ArgumentList @(
+            '-NoProfile', '-Command',
+            'while ($true) { Write-Output ("[heartbeat {0}]" -f (Get-Date -Format s)); Start-Sleep 300 }'
+          ) -PassThru -NoNewWindow
+          try {
+            cargo build --release --locked -p codex-cli --bin codex
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Stop-Process -Id $beat.Id -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Smoke test codex.exe
         shell: pwsh
@@ -158,7 +175,8 @@ jobs:
           patch="${{ steps.resolve.outputs.asset }}.patch"
           notes="Patched build of openai/codex ${{ steps.resolve.outputs.tag }} (commit ${{ steps.resolve.outputs.commit }}).
 
-          Adds the [reconnect] config table: mode = default | fixed, interval_ms, max_retries."
+          Adds the [reconnect] config table (mode = default | fixed, interval_ms, max_retries),
+          raises the stream_max_retries hard cap to 10000, and adds the TUI /reconnect command."
           if gh release view "${release}" >/dev/null 2>&1; then
             gh release upload "${release}" "${zip}" "${patch}" --clobber
           else

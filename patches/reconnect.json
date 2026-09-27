@@ -1,6 +1,6 @@
 {
   "name": "reconnect",
-  "description": "Adds the [reconnect] config table: fixed or default reconnect interval, and a stream retry budget override.",
+  "description": "Adds the [reconnect] config table (fixed/default interval, stream retry budget), the hard cap bump to 10000, and the TUI /reconnect command.",
   "edits": [
     {
       "file": "codex-rs/config/src/config_toml.rs",
@@ -79,6 +79,100 @@
       "find": "/// Hard cap for user-configured `stream_max_retries`.\nconst MAX_STREAM_MAX_RETRIES: u64 = 100;\n",
       "replace": "/// Hard cap for user-configured `stream_max_retries`.\nconst MAX_STREAM_MAX_RETRIES: u64 = 10_000;\n",
       "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/slash_command.rs",
+      "find": "    Status,\n    Daemon,\n",
+      "replace": "    Status,\n    Reconnect,\n    Daemon,\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/slash_command.rs",
+      "find": "            SlashCommand::Status => \"show current session configuration and token usage\",\n            SlashCommand::Cd => \"change the current working directory\",\n",
+      "replace": "            SlashCommand::Status => \"show current session configuration and token usage\",\n            SlashCommand::Reconnect => \"show or update stream reconnect timing and retry budget\",\n            SlashCommand::Cd => \"change the current working directory\",\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/slash_command.rs",
+      "find": "                | SlashCommand::Resume\n        )\n",
+      "replace": "                | SlashCommand::Resume\n                | SlashCommand::Reconnect\n        )\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/slash_command.rs",
+      "find": "                | SlashCommand::Ide\n        )\n",
+      "replace": "                | SlashCommand::Ide\n                | SlashCommand::Reconnect\n        )\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/slash_command.rs",
+      "find": "                | SlashCommand::Raw\n        )\n",
+      "replace": "                | SlashCommand::Raw\n                | SlashCommand::Reconnect\n        )\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/slash_command.rs",
+      "find": "            | SlashCommand::Btw => true,\n",
+      "replace": "            | SlashCommand::Btw\n            | SlashCommand::Reconnect => true,\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/chatwidget.rs",
+      "find": "mod reconnect;\nuse self::input_queue::InputQueueState;\n",
+      "replace": "mod reconnect;\nmod reconnect_command;\nuse self::input_queue::InputQueueState;\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/chatwidget/slash_dispatch.rs",
+      "find": "            SlashCommand::Warnings => self.app_event_tx.send(AppEvent::OpenWarnings),\n            SlashCommand::Status => {\n",
+      "replace": "            SlashCommand::Warnings => self.app_event_tx.send(AppEvent::OpenWarnings),\n            SlashCommand::Reconnect => {\n                self.show_reconnect_status();\n            }\n            SlashCommand::Status => {\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/chatwidget/slash_dispatch.rs",
+      "find": "                self.handle_ide_command_args(trimmed);\n            }\n",
+      "replace": "                self.handle_ide_command_args(trimmed);\n            }\n            SlashCommand::Reconnect => {\n                self.handle_reconnect_args(trimmed);\n            }\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/chatwidget/slash_dispatch.rs",
+      "find": "            | SlashCommand::Status\n            | SlashCommand::Daemon\n",
+      "replace": "            | SlashCommand::Status\n            | SlashCommand::Reconnect\n            | SlashCommand::Daemon\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/chatwidget/tests.rs",
+      "find": "mod reasoning_status_tests;\n#[path = \"tests/replay_render_tests.rs\"]\n",
+      "replace": "mod reasoning_status_tests;\nmod reconnect_command_tests;\n#[path = \"tests/replay_render_tests.rs\"]\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/app_event.rs",
+      "find": "\n    /// Discover experimental features for the requesting popup only.\n",
+      "replace": "\n    /// Persist `/reconnect` overrides and report the applied settings.\n    WriteReconnectConfig {\n        edits: Vec<codex_app_server_protocol::ConfigEdit>,\n        applied: codex_config::config_toml::ReconnectConfigToml,\n        summary: String,\n    },\n\n    /// Discover experimental features for the requesting popup only.\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/app/event_dispatch.rs",
+      "find": "            }\n            AppEvent::FetchExperimentalFeatures { thread_id, response_tx } => {\n",
+      "replace": "            }\n            AppEvent::WriteReconnectConfig {\n                edits,\n                applied,\n                summary,\n            } => match crate::config_update::write_config_batch(app_server.request_handle(), edits)\n                .await\n            {\n                Ok(_) => {\n                    self.chat_widget.apply_reconnect_config(applied);\n                    self.chat_widget.add_info_message(summary, /*hint*/ None);\n                }\n                Err(err) => {\n                    tracing::error!(error = %err, \"failed to persist reconnect settings\");\n                    self.chat_widget.add_error_message(format!(\n                        \"Failed to save reconnect settings: {}\",\n                        format_config_error(&err)\n                    ));\n                }\n            },\n            AppEvent::FetchExperimentalFeatures { thread_id, response_tx } => {\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/bottom_pane/slash_commands.rs",
+      "find": "                SlashCommand::Status,\n                SlashCommand::Daemon,\n",
+      "replace": "                SlashCommand::Status,\n                SlashCommand::Reconnect,\n                SlashCommand::Daemon,\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/chatwidget/reconnect_command.rs",
+      "create": true,
+      "replace": "//! `/reconnect` command: inspect and update stream reconnect settings.\n//!\n//! The command parses its arguments and forwards a `config/batchWrite` request to\n//! the app server, which reloads the user config so the change applies from the\n//! next turn. The widget only reports the resulting settings.\n\nuse super::*;\nuse crate::config_update::clear_config_value;\nuse crate::config_update::replace_config_value;\nuse codex_app_server_protocol::ConfigEdit;\nuse codex_config::config_toml::ReconnectConfigToml;\nuse codex_config::config_toml::ReconnectMode;\nuse serde_json::json;\n\n/// Usage shown as the hint for `/reconnect` and as the error for unknown arguments.\npub(crate) const RECONNECT_USAGE: &str =\n    \"Usage: /reconnect [default | fixed <interval_ms> | retries <max_retries|default>]\";\n\n/// Arguments accepted by `/reconnect`.\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub(crate) enum ReconnectCommand {\n    /// Report the current settings.\n    Show,\n    /// Restore the built-in exponential backoff schedule.\n    Default,\n    /// Sleep for a constant interval on every reconnect attempt.\n    Fixed(u64),\n    /// Override the stream retry budget; `None` restores the provider default.\n    Retries(Option<u64>),\n}\n\nimpl ReconnectCommand {\n    /// Config edits for a mutating command, or `None` when the command only reports settings.\n    pub(crate) fn apply(\n        self,\n        current: ReconnectConfigToml,\n    ) -> Option<(Vec<ConfigEdit>, ReconnectConfigToml, String)> {\n        let (edits, applied) = match self {\n            ReconnectCommand::Show => return None,\n            ReconnectCommand::Default => (\n                vec![\n                    replace_config_value(\"reconnect.mode\", json!(\"default\")),\n                    clear_config_value(\"reconnect.interval_ms\"),\n                ],\n                ReconnectConfigToml {\n                    mode: ReconnectMode::Default,\n                    interval_ms: None,\n                    max_retries: current.max_retries,\n                },\n            ),\n            ReconnectCommand::Fixed(interval_ms) => (\n                vec![\n                    replace_config_value(\"reconnect.mode\", json!(\"fixed\")),\n                    replace_config_value(\"reconnect.interval_ms\", json!(interval_ms)),\n                ],\n                ReconnectConfigToml {\n                    mode: ReconnectMode::Fixed,\n                    interval_ms: Some(interval_ms),\n                    max_retries: current.max_retries,\n                },\n            ),\n            ReconnectCommand::Retries(max_retries) => {\n                let edit = match max_retries {\n                    Some(max_retries) => {\n                        replace_config_value(\"reconnect.max_retries\", json!(max_retries))\n                    }\n                    None => clear_config_value(\"reconnect.max_retries\"),\n                };\n                (\n                    vec![edit],\n                    ReconnectConfigToml {\n                        mode: current.mode,\n                        interval_ms: current.interval_ms,\n                        max_retries,\n                    },\n                )\n            }\n        };\n        let summary = reconnect_update_summary(&applied);\n        Some((edits, applied, summary))\n    }\n}\n\n/// Parse the arguments typed after `/reconnect`.\npub(crate) fn parse_reconnect_args(args: &str) -> Result<ReconnectCommand, String> {\n    let mut parts = args.split_whitespace();\n    match (parts.next(), parts.next(), parts.next()) {\n        (None, None, None) => Ok(ReconnectCommand::Show),\n        (Some(\"default\"), None, None) => Ok(ReconnectCommand::Default),\n        (Some(\"fixed\"), Some(interval_ms), None) => {\n            let interval_ms: u64 = interval_ms.parse().map_err(|_| {\n                format!(\n                    \"`fixed` expects an interval in milliseconds, e.g. /reconnect fixed 3000\\n\\\n                     {RECONNECT_USAGE}\"\n                )\n            })?;\n            if interval_ms == 0 {\n                return Err(format!(\n                    \"`fixed` requires an interval greater than zero\\n{RECONNECT_USAGE}\"\n                ));\n            }\n            Ok(ReconnectCommand::Fixed(interval_ms))\n        }\n        (Some(\"retries\"), Some(\"default\"), None) => Ok(ReconnectCommand::Retries(None)),\n        (Some(\"retries\"), Some(max_retries), None) => {\n            let max_retries: u64 = max_retries.parse().map_err(|_| {\n                format!(\n                    \"`retries` expects a retry budget, e.g. /reconnect retries 5000\\n\\\n                     {RECONNECT_USAGE}\"\n                )\n            })?;\n            if max_retries == 0 {\n                return Err(format!(\n                    \"`retries` requires a budget greater than zero; use `retries default` to \\\n                     restore the provider default\\n{RECONNECT_USAGE}\"\n                ));\n            }\n            Ok(ReconnectCommand::Retries(Some(max_retries)))\n        }\n        _ => Err(RECONNECT_USAGE.to_string()),\n    }\n}\n\n/// Single-line description of the effective `[reconnect]` settings.\npub(crate) fn reconnect_status_summary(reconnect: &ReconnectConfigToml) -> String {\n    let mode = match reconnect.mode {\n        ReconnectMode::Default => \"default (exponential backoff)\".to_string(),\n        ReconnectMode::Fixed => format!(\n            \"fixed every {}ms\",\n            reconnect.interval_ms.map_or_else(\n                || \"unset\".to_string(),\n                |interval_ms| interval_ms.to_string()\n            )\n        ),\n    };\n    let max_retries = reconnect.max_retries.map_or_else(\n        || \"provider default\".to_string(),\n        |max_retries| max_retries.to_string(),\n    );\n    format!(\"mode={mode}, max_retries={max_retries}\")\n}\n\n/// Single-line confirmation shown after the settings were persisted.\npub(crate) fn reconnect_update_summary(reconnect: &ReconnectConfigToml) -> String {\n    format!(\n        \"Reconnect settings updated: {}; applies from the next turn\",\n        reconnect_status_summary(reconnect)\n    )\n}\n\nimpl ChatWidget {\n    /// Show the effective `[reconnect]` settings.\n    pub(super) fn show_reconnect_status(&mut self) {\n        let message = format!(\n            \"Reconnect settings: {}\",\n            reconnect_status_summary(&self.config.reconnect)\n        );\n        self.add_info_message(message, Some(RECONNECT_USAGE.to_string()));\n    }\n\n    /// Parse `/reconnect` arguments and, when they change settings, ask the app to persist them.\n    pub(super) fn handle_reconnect_args(&mut self, args: &str) {\n        let command = match parse_reconnect_args(args) {\n            Ok(command) => command,\n            Err(message) => {\n                self.add_error_message(message);\n                return;\n            }\n        };\n        let Some((edits, applied, summary)) = command.apply(self.config.reconnect) else {\n            self.show_reconnect_status();\n            return;\n        };\n        self.app_event_tx.send(AppEvent::WriteReconnectConfig {\n            edits,\n            applied,\n            summary,\n        });\n    }\n\n    /// Keep the widget's config snapshot in sync after `/reconnect` persists new settings.\n    pub(crate) fn apply_reconnect_config(&mut self, reconnect: ReconnectConfigToml) {\n        self.config.reconnect = reconnect;\n    }\n}\n"
+    },
+    {
+      "file": "codex-rs/tui/src/chatwidget/tests/reconnect_command_tests.rs",
+      "create": true,
+      "replace": "use super::*;\nuse crate::chatwidget::reconnect_command::ReconnectCommand;\nuse crate::chatwidget::reconnect_command::parse_reconnect_args;\nuse crate::chatwidget::reconnect_command::reconnect_status_summary;\nuse codex_config::config_toml::ReconnectConfigToml;\nuse codex_config::config_toml::ReconnectMode;\nuse pretty_assertions::assert_eq;\n\n#[test]\nfn parse_reconnect_args_accepts_supported_forms() {\n    assert_eq!(parse_reconnect_args(\"\"), Ok(ReconnectCommand::Show));\n    assert_eq!(parse_reconnect_args(\"  \"), Ok(ReconnectCommand::Show));\n    assert_eq!(\n        parse_reconnect_args(\"default\"),\n        Ok(ReconnectCommand::Default)\n    );\n    assert_eq!(\n        parse_reconnect_args(\"fixed 3000\"),\n        Ok(ReconnectCommand::Fixed(3000))\n    );\n    assert_eq!(\n        parse_reconnect_args(\"retries 5000\"),\n        Ok(ReconnectCommand::Retries(Some(5000)))\n    );\n    assert_eq!(\n        parse_reconnect_args(\"retries default\"),\n        Ok(ReconnectCommand::Retries(None))\n    );\n}\n\n#[test]\nfn parse_reconnect_args_rejects_invalid_forms() {\n    for args in [\n        \"fast\",\n        \"fixed\",\n        \"fixed 0\",\n        \"fixed soon\",\n        \"retries 0\",\n        \"retries many\",\n        \"retries\",\n        \"fixed 3000 5000\",\n        \"default 3000\",\n    ] {\n        let Err(message) = parse_reconnect_args(args) else {\n            panic!(\"expected `{args}` to be rejected\");\n        };\n        assert!(\n            message.contains(\"Usage: /reconnect\"),\n            \"expected usage in error for `{args}`, got: {message}\"\n        );\n    }\n}\n\n#[test]\nfn reconnect_status_summary_reports_effective_settings() {\n    insta::assert_snapshot!(\n        reconnect_status_summary(&ReconnectConfigToml::default()),\n        @\"mode=default (exponential backoff), max_retries=provider default\"\n    );\n    insta::assert_snapshot!(\n        reconnect_status_summary(&ReconnectConfigToml {\n            mode: ReconnectMode::Fixed,\n            interval_ms: Some(3000),\n            max_retries: Some(10_000),\n        }),\n        @\"mode=fixed every 3000ms, max_retries=10000\"\n    );\n}\n\n#[tokio::test]\nasync fn reconnect_command_without_arguments_reports_current_settings() {\n    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;\n\n    chat.dispatch_command(SlashCommand::Reconnect);\n\n    let rendered = match rx.try_recv() {\n        Ok(AppEvent::InsertHistoryCell(cell)) => {\n            lines_to_single_string(&cell.display_lines(/*width*/ 80))\n        }\n        other => panic!(\"expected reconnect settings output, got {other:?}\"),\n    };\n    insta::assert_snapshot!(rendered, @\"• Reconnect settings: mode=default (exponential backoff), max_retries=provider default Usage: /reconnect [default | fixed <interval_ms> | retries <max_retries|default>]\");\n}\n\n#[tokio::test]\nasync fn reconnect_command_with_interval_persists_fixed_mode() {\n    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;\n\n    chat.dispatch_command_with_args(\n        SlashCommand::Reconnect,\n        \"fixed 3000\".to_string(),\n        Vec::new(),\n    );\n\n    let expected_edits = vec![\n        crate::config_update::replace_config_value(\"reconnect.mode\", serde_json::json!(\"fixed\")),\n        crate::config_update::replace_config_value(\n            \"reconnect.interval_ms\",\n            serde_json::json!(3000),\n        ),\n    ];\n    let expected_applied = ReconnectConfigToml {\n        mode: ReconnectMode::Fixed,\n        interval_ms: Some(3000),\n        max_retries: None,\n    };\n    let expected_summary = \"Reconnect settings updated: mode=fixed every 3000ms, \\\n        max_retries=provider default; applies from the next turn\"\n        .to_string();\n    match rx.try_recv() {\n        Ok(AppEvent::WriteReconnectConfig {\n            edits,\n            applied,\n            summary,\n        }) => {\n            pretty_assertions::assert_eq!(\n                (edits, applied, summary),\n                (expected_edits, expected_applied, expected_summary)\n            );\n        }\n        other => panic!(\"expected reconnect config write, got {other:?}\"),\n    }\n}\n\n#[tokio::test]\nasync fn reconnect_command_rejects_unknown_arguments() {\n    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;\n\n    chat.dispatch_command_with_args(SlashCommand::Reconnect, \"fast\".to_string(), Vec::new());\n\n    let rendered = match rx.try_recv() {\n        Ok(AppEvent::InsertHistoryCell(cell)) => {\n            lines_to_single_string(&cell.display_lines(/*width*/ 80))\n        }\n        other => panic!(\"expected usage error output, got {other:?}\"),\n    };\n    insta::assert_snapshot!(rendered, @\"■ Usage: /reconnect [default | fixed <interval_ms> | retries <max_retries|default>]\");\n}\n"
     }
   ]
 }

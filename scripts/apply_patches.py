@@ -5,16 +5,18 @@ Every patch file in `patches/` is JSON:
 
     {
       "name": "reconnect",
-      "description": "...",
+      "description": "Adds the [reconnect] config table: fixed or default reconnect interval, and a stream retry budget override.",
       "edits": [
-        {"file": "codex-rs/...", "find": "...", "replace": "...", "expect": 1}
+        {"file": "codex-rs/...", "find": "...", "replace": "...", "expect": 1},
+        {"file": "codex-rs/...", "create": true, "replace": "<full file content>"}
       ]
     }
 
 An edit only applies when `find` occurs exactly `expect` times in the target
 file. Any mismatch (missing, or hit count differs) aborts the whole run before
 anything is written, so an upstream refactor fails the build loudly instead of
-leaving a half-patched tree.
+leaving a half-patched tree. An edit with `"create": true` writes a brand new
+file instead, and fails if the file already exists.
 
 Usage:
     python scripts/apply_patches.py --root codex-src           # apply
@@ -42,6 +44,15 @@ def load_patches() -> list[dict]:
         if not isinstance(data.get("edits"), list) or not data["edits"]:
             raise SystemExit(f"error: {patch_file.name} has no edits")
         for edit in data["edits"]:
+            if edit.get("create"):
+                missing = [key for key in ("file", "replace") if key not in edit]
+                if missing:
+                    raise SystemExit(f"error: {patch_file.name} create edit missing {missing}")
+                if "find" in edit:
+                    raise SystemExit(
+                        f"error: {patch_file.name} create edit must not have a find anchor"
+                    )
+                continue
             missing = [key for key in ("file", "find", "replace") if key not in edit]
             if missing:
                 raise SystemExit(f"error: {patch_file.name} edit missing {missing}")
@@ -103,6 +114,14 @@ def main() -> int:
         print(f"patch: {patch.get('name', '?')} ({len(patch['edits'])} edits)")
         for edit in patch["edits"]:
             target = root / edit["file"]
+            if edit.get("create"):
+                if target in texts or target.exists():
+                    raise SystemExit(f"error: create target already exists {edit['file']}")
+                texts[target] = edit["replace"]
+                newlines[target] = "\n"
+                applied += 1
+                print(f"  new {edit['file']}")
+                continue
             if target not in texts:
                 if not target.is_file():
                     raise SystemExit(f"error: missing file {edit['file']}")
@@ -119,6 +138,7 @@ def main() -> int:
     for target, text in texts.items():
         if newlines[target] == "\r\n":
             text = text.replace("\n", "\r\n")
+        target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding="utf-8", newline="")
         print(f"  wrote {target.relative_to(root)}")
     print(f"applied {applied} edits across {len(texts)} files")

@@ -6,8 +6,8 @@
 
 ```
 .github/workflows/build-windows-x64.yml   # 构建流水线（手动触发）
-patches/reconnect.json                    # 13 条精确替换规则
-scripts/apply_patches.py                  # 补丁应用器（断言锚点唯一命中）
+patches/reconnect.json                    # 29 条精确替换规则（含 2 个新增文件）
+scripts/apply_patches.py                  # 补丁应用器（断言锚点唯一命中；支持新建文件）
 ```
 
 ## 使用
@@ -37,9 +37,28 @@ max_retries = 5000    # 可选：覆盖 stream_max_retries（默认 5，原硬�
 - `max_retries` 之所以需要单独一个开关：`openai` 是保留的 provider id，不能用 `[model_providers.openai]` 设置 `stream_max_retries`。
 - 不配置 `[reconnect]` 时行为与上游完全一致。
 
+## `/reconnect` 命令（TUI 内动态调整）
+
+构建出的 `codex.exe` 在 TUI 里新增一个斜杠命令，**运行时直接读改写 `~/.codex/config.toml`，下一回合生效**（通过 app-server 的 `config/batchWrite`，无需重启）：
+
+```
+/reconnect                      # 查看当前生效设置
+/reconnect default              # 恢复上游默认：指数退避 + 抖动，重试次数用 provider 默认值
+/reconnect fixed 3000           # 固定 3 秒重连间隔（写 mode="fixed", interval_ms=3000）
+/reconnect retries 5000         # 覆盖 stream_max_retries = 5000
+/reconnect retries default      # 取消覆盖，回到 provider 默认
+```
+
+- 无参 `/reconnect` 回显：`Reconnect settings: mode=fixed every 3000ms, max_retries=provider default`。
+- 修改成功后回显 `Reconnect settings updated: ...; applies from the next turn`。
+- 参数非法时回显 `Usage: /reconnect [default | fixed <interval_ms> | retries <max_retries|default>]`，不写任何配置。
+- 命令在任务运行中、side conversation、queued（排队）场景下均可用，行为与 `/status` 一致。
+- `fixed` 要求 `interval_ms > 0`；配置层加载时会校验，`/reconnect fixed 0` 直接被解析层拒绝。
+
 ## 成本注意（GitHub Free）
 
-- Windows runner 计时按 **2 倍**分钟数消耗（2000 分钟/月 ≈ 1000 Windows 分钟），单次冷构建约 20–30 分钟。
+- Windows runner 计时按 **2 倍**分钟数消耗（2000 分钟/月 ≈ 1000 Windows 分钟），单次冷构建约 **60–120 分钟**（缓存命中后约 20–40 分钟）。
+- 日志在大 crate（`codex-core`、`codex-tui`）编译期间会长时间没有新输出，这是正常的；`timeout-minutes: 180` 之内继续等即可。
 - Artifact 存储免费额度 500 MB，`codex.exe` 约 200 MB，所以默认打成 zip（约几十 MB）并只保留 7 天。
 - 超额后 Actions 直接不可用（默认 $0 上限，不会扣费）。
 
