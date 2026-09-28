@@ -157,6 +157,44 @@ jobs:
             Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           Write-Host "Using linker: $lld"
 
+      - name: Configure rusty_v8 sandbox prebuilt (code-mode-host)
+        shell: bash
+        # codex-code-mode-host enables v8/v8_enable_sandbox, but crates.io
+        # publishes no ptrcomp_sandbox archive for windows-msvc, so the v8
+        # build script's default download 404s. openai/codex ships matching
+        # assets on its rusty-v8-v<version> release; wire them up like
+        # codex-src/.github/actions/setup-rusty-v8, adjusted for the
+        # codex-src/ subdirectory layout of this workflow.
+        run: |
+          set -euo pipefail
+          target=x86_64-pc-windows-msvc
+          profile=ptrcomp_sandbox_release
+          version="$(python -c 'import tomllib; lock = tomllib.load(open("codex-src/codex-rs/Cargo.lock", "rb")); vs = sorted({p["version"] for p in lock["package"] if p["name"] == "v8"}); assert len(vs) == 1, vs; print(vs[0])')"
+          echo "v8 crate version: ${version}"
+          release_url="https://github.com/openai/codex/releases/download/rusty-v8-v${version}"
+          binding_dir="$(cygpath -u "${RUNNER_TEMP}")/rusty_v8"
+          mkdir -p "${binding_dir}"
+          archive="rusty_v8_${profile}_${target}.lib.gz"
+          binding="src_binding_${profile}_${target}.rs"
+          manifest="rusty_v8_${profile}_${target}.sha256"
+          trusted="codex-src/third_party/v8/rusty_v8_${version//./_}_release_manifests.sha256"
+          curl -fsSL "${release_url}/${manifest}" -o "${binding_dir}/${manifest}"
+          expected="$(grep -F "  ${manifest}" "${trusted}" | cut -d ' ' -f 1)"
+          actual="$(python -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${binding_dir}/${manifest}")"
+          if [[ "${actual}" != "${expected}" ]]; then
+            echo "Checksum mismatch for ${manifest}: expected ${expected}, got ${actual}" >&2
+            exit 1
+          fi
+          curl -fsSL "${release_url}/${archive}" -o "${binding_dir}/${archive}"
+          curl -fsSL "${release_url}/${binding}" -o "${binding_dir}/${binding}"
+          if [[ "$(wc -l < "${binding_dir}/${manifest}")" -ne 2 ]]; then
+            echo "Expected exactly two checksums for ${target} in ${manifest}" >&2
+            exit 1
+          fi
+          (cd "${binding_dir}" && tr -d '\r' < "${manifest}" | sha256sum --check -)
+          echo "RUSTY_V8_ARCHIVE=$(cygpath -w "${binding_dir}/${archive}")" >> "${GITHUB_ENV}"
+          echo "RUSTY_V8_SRC_BINDING_PATH=$(cygpath -w "${binding_dir}/${binding}")" >> "${GITHUB_ENV}"
+
       - name: Build codex.exe
         shell: pwsh
         # Fail loudly on a hung build well before the job-level 240-minute cap.
