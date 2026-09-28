@@ -18,6 +18,10 @@ anything is written, so an upstream refactor fails the build loudly instead of
 leaving a half-patched tree. An edit with `"create": true` writes a brand new
 file instead, and fails if the file already exists.
 
+`--check` never writes; it keeps going after a mismatch and reports every
+failing anchor at the end, so one run shows the full list of edits that need
+re-basing after an upstream release.
+
 Usage:
     python scripts/apply_patches.py --root codex-src           # apply
     python scripts/apply_patches.py --root codex-src --check   # dry run
@@ -73,7 +77,7 @@ def apply_edit(text: str, edit: dict) -> str:
     expect = edit.get("expect", 1)
     count = text.count(find)
     if count != expect:
-        raise SystemExit(
+        raise ValueError(
             "error: patch anchor mismatch\n"
             f"  file:   {edit['file']}\n"
             f"  expect: {expect} occurrence(s)\n"
@@ -81,7 +85,7 @@ def apply_edit(text: str, edit: dict) -> str:
             f"  anchor: {find.splitlines()[0][:120]!r}"
         )
     if edit["replace"] in text:
-        raise SystemExit(
+        raise ValueError(
             f"error: replacement already present in {edit['file']}; "
             "is the tree already patched?"
         )
@@ -110,13 +114,19 @@ def main() -> int:
     texts: dict[Path, str] = {}
     newlines: dict[Path, str] = {}
     applied = 0
+    failures: list[str] = []
     for patch in patches:
         print(f"patch: {patch.get('name', '?')} ({len(patch['edits'])} edits)")
         for edit in patch["edits"]:
             target = root / edit["file"]
             if edit.get("create"):
                 if target in texts or target.exists():
-                    raise SystemExit(f"error: create target already exists {edit['file']}")
+                    problem = f"error: create target already exists {edit['file']}"
+                    if not args.check:
+                        raise SystemExit(problem)
+                    failures.append(problem)
+                    print(f"  FAIL {edit['file']}  <- create target exists")
+                    continue
                 texts[target] = edit["replace"]
                 newlines[target] = "\n"
                 applied += 1
@@ -124,14 +134,32 @@ def main() -> int:
                 continue
             if target not in texts:
                 if not target.is_file():
-                    raise SystemExit(f"error: missing file {edit['file']}")
+                    problem = f"error: missing file {edit['file']}"
+                    if not args.check:
+                        raise SystemExit(problem)
+                    failures.append(problem)
+                    print(f"  FAIL {edit['file']}  <- file missing")
+                    continue
                 texts[target], newlines[target] = read_text(target)
-            texts[target] = apply_edit(texts[target], edit)
+            try:
+                texts[target] = apply_edit(texts[target], edit)
+            except ValueError as err:
+                if not args.check:
+                    raise SystemExit(str(err))
+                failures.append(str(err))
+                first = edit["find"].splitlines()[0]
+                print(f"  FAIL {edit['file']}  <- {first[:90]!r}")
+                continue
             applied += 1
             first = edit["find"].splitlines()[0]
             print(f"  ok  {edit['file']}  <- {first[:90]!r}")
 
     if args.check:
+        if failures:
+            print(f"\ncheck FAILED: {len(failures)} problem(s), {applied} anchors matched")
+            for problem in failures:
+                print(f"\n{problem}")
+            return 1
         print(f"check passed: {applied} anchors matched, no files written")
         return 0
 

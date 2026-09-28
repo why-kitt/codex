@@ -6,7 +6,7 @@
 
 ```
 .github/workflows/build-windows-x64.yml   # 构建流水线（手动触发）
-patches/reconnect.json                    # 29 条精确替换规则（含 2 个新增文件）
+patches/reconnect.json                    # 30 条精确替换规则（含 2 个新增文件）
 scripts/apply_patches.py                  # 补丁应用器（断言锚点唯一命中；支持新建文件）
 ```
 
@@ -14,7 +14,7 @@ scripts/apply_patches.py                  # 补丁应用器（断言锚点唯一
 
 1. 把本目录内容推到你的私有仓库。
 2. GitHub → Actions → **Build patched Windows x64** → **Run workflow**。
-   - `tag` 留空 = 取 `openai/codex` 最新 release（当前为 `rust-v0.157.1`）；也可填指定 tag。
+   - `tag` 留空 = 取 `openai/codex` 最新 release（补丁锚点跟随最新 release，当前为 `rust-v0.158.0`）；也可填指定 tag（须与锚点版本一致，否则 apply 步骤会报 anchor mismatch）。
    - `publish_release` 控制是否发 Release（只跑构建时取消勾选，省存储）。
 3. 产物：
    - **Artifact** `codex-windows-x64`（保留 7 天）：`codex-<tag>-windows-x64.zip`（完整包）+ `.patch`（打过的完整 diff）。

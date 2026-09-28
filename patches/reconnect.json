@@ -70,9 +70,14 @@
     },
     {
       "file": "codex-rs/core/src/responses_retry.rs",
-      "find": "            retry_at: err\n                .server_retry_delay()\n                .and_then(|delay| tokio::time::Instant::now().checked_add(delay)),\n",
-      "replace": "            retry_at: match fixed_delay {\n                Some(fixed) => tokio::time::Instant::now().checked_add(fixed),\n                None => err\n                    .server_retry_delay()\n                    .and_then(|delay| tokio::time::Instant::now().checked_add(delay)),\n            },\n",
+      "find": "        .insert(ExhaustedResponseRetry {\n            turn_id: turn_context.sub_id.clone(),\n            retry_at: retry_after.map(RetryAfter::deadline),\n        });\n",
+      "replace": "        .insert(ExhaustedResponseRetry {\n            turn_id: turn_context.sub_id.clone(),\n            retry_at: match fixed_delay {\n                Some(fixed) => tokio::time::Instant::now().checked_add(fixed),\n                None => retry_after.map(RetryAfter::deadline),\n            },\n        });\n",
       "expect": 1
+    },
+    {
+      "file": "codex-rs/core/src/responses_retry.rs",
+      "find": "        let now = Instant::now();\n        let retry_at = retry_after.map(RetryAfter::deadline).unwrap_or(now + delay);\n",
+      "replace": "        let now = Instant::now();\n        let retry_at = match fixed_delay {\n            Some(_) => now + delay,\n            None => retry_after.map(RetryAfter::deadline).unwrap_or(now + delay),\n        };\n"
     },
     {
       "file": "codex-rs/model-provider-info/src/lib.rs",
