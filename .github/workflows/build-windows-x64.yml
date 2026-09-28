@@ -256,6 +256,9 @@ jobs:
           # Only this layout satisfies validate_package(), so the CLI can start
           # its background daemon without --no-daemon and resolve the code-mode
           # host (AnySearch) from bin/.
+          # codex_package.targets refuses to import without CODEX_REPO_ROOT
+          # (normally exported by `just assemble-codex-package` upstream).
+          $env:CODEX_REPO_ROOT = (Resolve-Path "codex-src").Path
           $name = "${{ steps.resolve.outputs.asset }}"
           $version = "${{ steps.resolve.outputs.tag }}" -replace '^rust-v', '' -replace '^v', ''
           $release = "codex-src/codex-rs/target/release"
