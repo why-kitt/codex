@@ -27,7 +27,10 @@ jobs:
   build:
     name: Build codex.exe
     runs-on: windows-latest
-    timeout-minutes: 180
+    # Whole-job budget: 7 min setup + 170 min build + ~15 min smoke/package/
+    # upload/release/cache-save. Must stay well above those or a successful
+    # build gets killed during artifact upload.
+    timeout-minutes: 240
     steps:
       - name: Checkout this repository
         uses: actions/checkout@v4
@@ -112,6 +115,9 @@ jobs:
         with:
           workspaces: codex-src/codex-rs -> target
           key: ${{ steps.resolve.outputs.tag }}
+          # Save even on failure/timeout so a truncated build resumes from
+          # the partial cache on the next run instead of starting cold.
+          save-always: true
 
       - name: Print runner specs
         shell: pwsh
@@ -153,12 +159,19 @@ jobs:
 
       - name: Build codex.exe
         shell: pwsh
-        # Fail loudly on a hung build well before the job-level 180-minute cap.
-        timeout-minutes: 140
+        # Fail loudly on a hung build well before the job-level 240-minute cap.
+        # Expected duration with LTO off: ~100-110 min (worst observed ~145);
+        # rustc_cpu_s heartbeat flags a real stall within minutes.
+        timeout-minutes: 170
         working-directory: codex-src/codex-rs
         env:
           STABLE_GIT_COMMIT: ${{ steps.resolve.outputs.commit }}
           LIBSQLITE3_FLAGS: SQLITE_DISABLE_INTRINSIC
+          # The final codex-cli crate runs thin LTO over the whole workspace,
+          # which is the phase that starved the 4-core hosted runner for hours.
+          # Drop it for CI: much faster links, slightly slower binary. Delete
+          # this line to match the upstream release profile exactly.
+          CARGO_PROFILE_RELEASE_LTO: "off"
         run: |
           # Heartbeat: a child pwsh writing straight to this step's stdout, so the
           # log keeps moving even when cargo itself goes quiet for a long time.
@@ -168,10 +181,10 @@ jobs:
           while ($true) {
             $os = Get-CimInstance Win32_OperatingSystem
             $ram = [math]::Round($os.FreePhysicalMemory / 1024)
-            $rustc = @(Get-Process rustc -ErrorAction SilentlyContinue).Count
-            $link = @(Get-Process link -ErrorAction SilentlyContinue).Count
-            $cargo = @(Get-Process cargo -ErrorAction SilentlyContinue).Count
-            Write-Output ("[heartbeat {0}] ram_free_mb={1} cargo={2} rustc={3} link={4}" -f (Get-Date -Format s), $ram, $cargo, $rustc, $link)
+            $rustc = @(Get-Process rustc -ErrorAction SilentlyContinue)
+            $link = @(Get-Process link, rust-lld -ErrorAction SilentlyContinue).Count
+            $cpu = [math]::Round(($rustc | Measure-Object -Property CPU -Sum).Sum, 1)
+            Write-Output ("[heartbeat {0}] ram_free_mb={1} rustc={2} rustc_cpu_s={3} link={4}" -f (Get-Date -Format s), $ram, $rustc.Count, $cpu, $link)
             Start-Sleep 300
           }
           '@
