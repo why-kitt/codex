@@ -193,6 +193,12 @@ jobs:
           try {
             cargo build --release --locked -p codex-cli --bin codex
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            # Helper binaries the packaged layout requires (validate_package):
+            # codex-code-mode-host (AnySearch/code mode), codex-command-runner
+            # and codex-windows-sandbox-setup (codex-resources). Shares deps
+            # with codex.exe, so this is only minutes of incremental build.
+            cargo build --release --locked -p codex-code-mode-host -p codex-windows-sandbox
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } finally {
             Stop-Process -Id $beat.Id -Force -ErrorAction SilentlyContinue
           }
@@ -206,10 +212,30 @@ jobs:
         id: package
         shell: pwsh
         run: |
+          # Assemble the same canonical package layout openai/codex ships:
+          #   codex-package.json, bin/codex.exe, bin/codex-code-mode-host.exe,
+          #   codex-path/rg.exe (auto-fetched), codex-resources/*.exe
+          # Only this layout satisfies validate_package(), so the CLI can start
+          # its background daemon without --no-daemon and resolve the code-mode
+          # host (AnySearch) from bin/.
           $name = "${{ steps.resolve.outputs.asset }}"
-          Copy-Item "codex-src/codex-rs/target/release/codex.exe" "$name.exe"
-          Compress-Archive -Path "$name.exe" -DestinationPath "$name.zip" -Force
-          Get-Item "$name.exe", "$name.zip", "$name.patch" |
+          $version = "${{ steps.resolve.outputs.tag }}" -replace '^rust-v', '' -replace '^v', ''
+          $release = "codex-src/codex-rs/target/release"
+          python codex-src/scripts/build_codex_package.py `
+            --target x86_64-pc-windows-msvc `
+            --variant codex `
+            --package-version $version `
+            --entrypoint-bin "$release\codex.exe" `
+            --code-mode-host-bin "$release\codex-code-mode-host.exe" `
+            --codex-command-runner-bin "$release\codex-command-runner.exe" `
+            --codex-windows-sandbox-setup-bin "$release\codex-windows-sandbox-setup.exe" `
+            --package-dir "$env:RUNNER_TEMP\codex-package" `
+            --archive-output "$name.zip" `
+            --force
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$env:RUNNER_TEMP\codex-package\bin\codex.exe" --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-Item "$name.zip", "$name.patch" |
             Select-Object Name, @{n = "MB"; e = { [math]::Round($_.Length / 1MB, 1) }} |
             Format-Table -AutoSize | Out-String | Write-Host
 
@@ -236,7 +262,11 @@ jobs:
           notes="Patched build of openai/codex ${{ steps.resolve.outputs.tag }} (commit ${{ steps.resolve.outputs.commit }}).
 
           Adds the [reconnect] config table (mode = default | fixed, interval_ms, max_retries),
-          raises the stream_max_retries hard cap to 10000, and adds the TUI /reconnect command."
+          raises the stream_max_retries hard cap to 10000, and adds the TUI /reconnect command.
+
+          The zip is a complete package (bin/codex.exe, bin/codex-code-mode-host.exe,
+          codex-path, codex-resources). Extract it and run bin/codex.exe; no --no-daemon
+          flag is needed and AnySearch/code-mode tools work out of the box."
           if gh release view "${release}" >/dev/null 2>&1; then
             gh release upload "${release}" "${zip}" "${patch}" --clobber
           else
