@@ -79,6 +79,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          git -C codex-src add --intent-to-add .
           git -C codex-src diff > "${{ steps.resolve.outputs.asset }}.patch"
           echo "patched files:"
           git -C codex-src --no-pager diff --stat
@@ -253,9 +254,8 @@ jobs:
           # Assemble the same canonical package layout openai/codex ships:
           #   codex-package.json, bin/codex.exe, bin/codex-code-mode-host.exe,
           #   codex-path/rg.exe (auto-fetched), codex-resources/*.exe
-          # Only this layout satisfies validate_package(), so the CLI can start
-          # its background daemon without --no-daemon and resolve the code-mode
-          # host (AnySearch) from bin/.
+          # The complete layout resolves the code-mode host (AnySearch) and
+          # sandbox helpers. Local TUI sessions use the patched embedded backend.
           # codex_package.targets refuses to import without CODEX_REPO_ROOT
           # (normally exported by `just assemble-codex-package` upstream).
           $env:CODEX_REPO_ROOT = (Resolve-Path "codex-src").Path
@@ -303,11 +303,13 @@ jobs:
           notes="Patched build of openai/codex ${{ steps.resolve.outputs.tag }} (commit ${{ steps.resolve.outputs.commit }}).
 
           Adds the [reconnect] config table (mode = default | fixed, interval_ms, max_retries),
-          raises the stream_max_retries hard cap to 10000, and adds the TUI /reconnect command.
+          raises the stream_max_retries hard cap to 10000, and adds process-local TUI /reconnect controls.
+          Overrides apply until CLI exit without changing config.toml. Explicit retry limits also bound
+          failed network connections. Background Windows commands preserve hidden-console flags.
 
           The zip is a complete package (bin/codex.exe, bin/codex-code-mode-host.exe,
-          codex-path, codex-resources). Extract it and run bin/codex.exe; no --no-daemon
-          flag is needed and AnySearch/code-mode tools work out of the box."
+          codex-path, codex-resources). Extract it and run bin/codex.exe; local sessions use
+          the patched embedded backend automatically. AnySearch/code-mode tools use the bundled host."
           if gh release view "${release}" >/dev/null 2>&1; then
             gh release upload "${release}" "${zip}" "${patch}" --clobber
           else

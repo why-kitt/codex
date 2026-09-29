@@ -6,7 +6,8 @@
 
 ```
 .github/workflows/build-windows-x64.yml   # 构建流水线（手动触发）
-patches/reconnect.json                    # 30 条精确替换规则（含 2 个新增文件）
+patches/reconnect.json                    # 基础重连补丁
+patches/runtime-console.json              # 进程内重连设置与 Windows 后台命令窗口修复
 scripts/apply_patches.py                  # 补丁应用器（断言锚点唯一命中；支持新建文件）
 ```
 
@@ -14,7 +15,7 @@ scripts/apply_patches.py                  # 补丁应用器（断言锚点唯一
 
 1. 把本目录内容推到你的私有仓库。
 2. GitHub → Actions → **Build patched Windows x64** → **Run workflow**。
-   - `tag` 留空 = 取 `openai/codex` 最新 release（补丁锚点跟随最新 release，当前为 `rust-v0.158.0`）；也可填指定 tag（须与锚点版本一致，否则 apply 步骤会报 anchor mismatch）。
+   - `tag` 留空 = 取 `openai/codex` 最新 release（补丁锚点跟随最新 release，已验证锚点兼容 `rust-v0.158.0` / `rust-v0.159.0`）；也可填指定 tag（须与锚点版本一致，否则 apply 步骤会报 anchor mismatch）。
    - `publish_release` 控制是否发 Release（只跑构建时取消勾选，省存储）。
 3. 产物：
    - **Artifact** `codex-windows-x64`（保留 7 天）：`codex-<tag>-windows-x64.zip`（完整包）+ `.patch`（打过的完整 diff）。
@@ -33,11 +34,11 @@ codex-resources/codex-command-runner.exe
 codex-resources/codex-windows-sandbox-setup.exe
 ```
 
-解压后直接运行 `bin\codex.exe` 即可：**无需 `--no-daemon`**（后台 daemon 通过 `validate_package` 检查），AnySearch/命令工具也能找到宿主。注意 `CODEX_HOME`（默认 `~/.codex`）不要放在解压目录里面。
+解压后直接运行 `bin\codex.exe`。普通本地会话默认使用**进程内后端**，不会接入或自动安装共享 daemon，避免前台有补丁而后台被官方更新替换。AnySearch/命令工具从完整包中解析宿主。显式远程会话和 `codex agents` 保留上游行为；远程会话不支持本地 `/reconnect` 覆盖。
 
 上游如果重构了锚点代码，`apply_patches.py` 会直接报锚点命中数不符并让构建失败（不会输出半打补丁的产物）。
 
-## `[reconnect]` 配置
+## `[reconnect]` 启动默认配置
 
 `config.toml`：
 
@@ -50,25 +51,33 @@ max_retries = 5000    # 可选：覆盖 stream_max_retries（默认 5，原硬�
 
 - `mode = "fixed"` 时忽略服务端 `Retry-After`，始终按 `interval_ms` 重试；若服务端建议更长，会打一条 `warn!` 日志（不改变行为）。
 - `max_retries` 之所以需要单独一个开关：`openai` 是保留的 provider id，不能用 `[model_providers.openai]` 设置 `stream_max_retries`。
-- 不配置 `[reconnect]` 时行为与上游完全一致。
+- 不配置 `[reconnect]` 时重试策略沿用上游默认；本地会话仍默认使用进程内后端。
 
 ## `/reconnect` 命令（TUI 内动态调整）
 
-构建出的 `codex.exe` 在 TUI 里新增一个斜杠命令，**运行时直接读改写 `~/.codex/config.toml`，下一回合生效**（通过 app-server 的 `config/batchWrite`，无需重启）：
+启动时读取配置作为默认值。TUI 的 `/reconnect` **只覆盖当前 CLI 进程的内存设置**，不写入 `config.toml`；普通请求在下一次决定是否重试时采用新设置，已经开始的等待不被中断。覆盖持续到进程退出，新进程重新读取配置默认值。
 
 ```
 /reconnect                      # 查看当前生效设置
-/reconnect default              # 恢复上游默认：指数退避 + 抖动，重试次数用 provider 默认值
-/reconnect fixed 3000           # 固定 3 秒重连间隔（写 mode="fixed", interval_ms=3000）
-/reconnect retries 5000         # 覆盖 stream_max_retries = 5000
-/reconnect retries default      # 取消覆盖，回到 provider 默认
+/reconnect default              # 使用指数退避 + 抖动，保留当前重试次数覆盖
+/reconnect fixed 3000           # 本进程固定 3 秒重连间隔
+/reconnect retries 5000         # 本进程覆盖重试次数为 5000
+/reconnect retries default      # 本进程使用 provider 重试次数
 ```
 
 - 无参 `/reconnect` 回显：`Reconnect settings: mode=fixed every 3000ms, max_retries=provider default`。
-- 修改成功后回显 `Reconnect settings updated: ...; applies from the next turn`。
-- 参数非法时回显 `Usage: /reconnect [default | fixed <interval_ms> | retries <max_retries|default>]`，不写任何配置。
+- 修改成功后回显 `Reconnect settings updated: ...; active until this process exits; config.toml unchanged`。
+- 参数非法时回显 `Usage: /reconnect [default | fixed <interval_ms> | retries <max_retries|default>]`，不改变运行参数，也不写配置。
+- 显式设置重试次数时，网络连接失败也遵循该上限；不设上限时保留上游的网络恢复重试策略。
+- 重试次数接受 1–10000；远程压缩仍保留上游独立的重试上限。
 - 命令在任务运行中、side conversation、queued（排队）场景下均可用，行为与 `/status` 一致。
 - `fixed` 要求 `interval_ms > 0`；配置层加载时会校验，`/reconnect fixed 0` 直接被解析层拒绝。
+
+## Windows 命令窗口
+
+补丁为捕获输出的后台命令保留 `CREATE_NO_WINDOW`，包括 Job 管理的 Git、hook、凭据命令、shell snapshot，以及 legacy 沙箱的非交互管道分支。交互式命令仍走 ConPTY，不关闭沙箱。
+
+上游相关报告：[Windows daemon 请求期间反复闪出终端窗口 #48074](https://github.com/openai/codex/issues/48074)。
 
 ## 成本注意（GitHub Free）
 

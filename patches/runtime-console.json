@@ -1,0 +1,202 @@
+{
+  "name": "runtime-console",
+  "description": "Process-only reconnect controls and hidden Windows background commands.",
+  "edits": [
+    {
+      "file": "codex-rs/config/src/lib.rs",
+      "find": "pub mod profile_toml;\nmod project_root_markers;\nmod project_trust;\nmod requirements_exec_policy;\nmod requirements_layers;\npub mod schema;\n",
+      "replace": "pub mod profile_toml;\nmod project_root_markers;\nmod project_trust;\nmod reconnect_runtime;\npub use reconnect_runtime::effective_reconnect_config;\npub use reconnect_runtime::reconnect_retry_budget;\npub use reconnect_runtime::set_reconnect_override;\nmod requirements_exec_policy;\nmod requirements_layers;\npub mod schema;\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/config/src/reconnect_runtime.rs",
+      "create": true,
+      "replace": "//! Reconnect overrides shared by the TUI and its embedded server for this process.\n//! Configuration files supply defaults; interactive overrides never write those files.\n\nuse crate::config_toml::ReconnectConfigToml;\nuse std::sync::RwLock;\n\nstatic OVERRIDE: RwLock<Option<ReconnectConfigToml>> = RwLock::new(None);\n\n/// Resolve the process override, falling back to the session's startup configuration.\npub fn effective_reconnect_config(defaults: ReconnectConfigToml) -> ReconnectConfigToml {\n    OVERRIDE\n        .read()\n        .unwrap_or_else(std::sync::PoisonError::into_inner)\n        .unwrap_or(defaults)\n}\n\n/// Replace the process override. Passing no override restores configuration defaults.\npub fn set_reconnect_override(config: Option<ReconnectConfigToml>) {\n    *OVERRIDE\n        .write()\n        .unwrap_or_else(std::sync::PoisonError::into_inner) = config;\n}\n\n/// Resolve the stream retry budget without changing a provider's configured default.\npub fn reconnect_retry_budget(defaults: ReconnectConfigToml, provider_budget: u64) -> u64 {\n    effective_reconnect_config(defaults)\n        .max_retries\n        .unwrap_or(provider_budget)\n        .min(10_000)\n}\n"
+    },
+    {
+      "file": "codex-rs/core/config.schema.json",
+      "find": "        }\n      ]\n    },\n    \"ResumeCwdMode\": {\n      \"description\": \"Working directory to use when resuming or forking a session.\",\n      \"oneOf\": [\n",
+      "replace": "        }\n      ]\n    },\n    \"ReconnectConfigToml\": {\n      \"additionalProperties\": false,\n      \"description\": \"Reconnect overrides for model stream retries.\",\n      \"properties\": {\n        \"interval_ms\": {\n          \"description\": \"Constant delay in milliseconds; only used when `mode = \\\"fixed\\\"`.\",\n          \"format\": \"uint64\",\n          \"minimum\": 0.0,\n          \"type\": \"integer\"\n        },\n        \"max_retries\": {\n          \"description\": \"Overrides the provider's `stream_max_retries` budget for this run.\",\n          \"format\": \"uint64\",\n          \"minimum\": 0.0,\n          \"type\": \"integer\"\n        },\n        \"mode\": {\n          \"allOf\": [\n            {\n              \"$ref\": \"#/definitions/ReconnectMode\"\n            }\n          ],\n          \"default\": \"default\",\n          \"description\": \"Delay schedule between reconnect attempts. Defaults to `default`.\"\n        }\n      },\n      \"type\": \"object\"\n    },\n    \"ReconnectMode\": {\n      \"description\": \"Selects the delay schedule used between model stream reconnect attempts.\",\n      \"oneOf\": [\n        {\n          \"description\": \"Exponential backoff with jitter, matching the built-in behavior.\",\n          \"enum\": [\n            \"default\"\n          ],\n          \"type\": \"string\"\n        },\n        {\n          \"description\": \"Sleep for a constant `interval_ms` on every attempt.\",\n          \"enum\": [\n            \"fixed\"\n          ],\n          \"type\": \"string\"\n        }\n      ]\n    },\n    \"ResumeCwdMode\": {\n      \"description\": \"Working directory to use when resuming or forking a session.\",\n      \"oneOf\": [\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/core/config.schema.json",
+      "find": "      \"default\": null,\n      \"description\": \"Experimental / do not use. Realtime websocket session selection. `version` controls v1/v2 and `type` controls conversational/transcription.\"\n    },\n    \"responses_api_metadata\": {\n      \"additionalProperties\": {\n        \"type\": \"string\"\n",
+      "replace": "      \"default\": null,\n      \"description\": \"Experimental / do not use. Realtime websocket session selection. `version` controls v1/v2 and `type` controls conversational/transcription.\"\n    },\n    \"reconnect\": {\n      \"allOf\": [\n        {\n          \"$ref\": \"#/definitions/ReconnectConfigToml\"\n        }\n      ],\n      \"description\": \"Overrides for model stream reconnect timing and retry budget.\"\n    },\n    \"responses_api_metadata\": {\n      \"additionalProperties\": {\n        \"type\": \"string\"\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/core/src/compact.rs",
+      "find": "        turn_context.model_info().truncation_policy.into(),\n    );\n\n    let max_retries = turn_context.provider.info().stream_max_retries();\n    let mut retries = 0;\n    // Reuse one client session so turn-scoped state (sticky routing and websocket incremental\n    // request tracking) survives retries within this compact turn.\n",
+      "replace": "        turn_context.model_info().truncation_policy.into(),\n    );\n\n    let max_retries = codex_config::reconnect_retry_budget(\n        turn_context.config.reconnect,\n        turn_context.provider.info().stream_max_retries(),\n    );\n    let mut retries = 0;\n    // Reuse one client session so turn-scoped state (sticky routing and websocket incremental\n    // request tracking) survives retries within this compact turn.\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/core/src/compact_remote_v2.rs",
+      "find": "    responses_metadata: &CodexResponsesMetadata,\n) -> CodexResult<RemoteCompactionV2Output> {\n    let turn_context = &step_context.turn;\n    let max_retries = turn_context\n        .provider\n        .info()\n        .stream_max_retries()\n        .min(MAX_REMOTE_COMPACTION_V2_STREAM_RETRIES);\n    let mut retry_state = ResponsesStreamRetryState::default();\n    loop {\n        let result = match client_session\n",
+      "replace": "    responses_metadata: &CodexResponsesMetadata,\n) -> CodexResult<RemoteCompactionV2Output> {\n    let turn_context = &step_context.turn;\n    let max_retries = codex_config::reconnect_retry_budget(\n        turn_context.config.reconnect,\n        turn_context.provider.info().stream_max_retries(),\n    )\n    .min(MAX_REMOTE_COMPACTION_V2_STREAM_RETRIES);\n    let mut retry_state = ResponsesStreamRetryState::default();\n    loop {\n        let result = match client_session\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/core/src/config/mod.rs",
+      "find": "                \"reconnect.mode = \\\"fixed\\\" requires reconnect.interval_ms to be greater than zero\",\n            ));\n        }\n        let model_providers = match reconnect.max_retries {\n            Some(max_retries) => model_providers\n                .into_iter()\n                .map(|(id, mut provider)| {\n                    provider.stream_max_retries = Some(max_retries);\n                    (id, provider)\n                })\n                .collect(),\n            None => model_providers,\n        };\n\n        let model_provider_id = config_layer_stack.required_model_provider().map(str::to_string)\n            .or(model_provider)\n",
+      "replace": "                \"reconnect.mode = \\\"fixed\\\" requires reconnect.interval_ms to be greater than zero\",\n            ));\n        }\n\n        let model_provider_id = config_layer_stack.required_model_provider().map(str::to_string)\n            .or(model_provider)\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/core/src/responses_retry.rs",
+      "find": "    let Some(delay) = err.retry_delay(retry_count) else {\n        return Err(err);\n    };\n    let fixed_delay = fixed_reconnect_delay(&turn_context.config.reconnect);\n    if let (Some(fixed), Some(server)) = (fixed_delay, err.server_retry_delay())\n        && server > fixed\n    {\n",
+      "replace": "    let Some(delay) = err.retry_delay(retry_count) else {\n        return Err(err);\n    };\n    let reconnect = codex_config::effective_reconnect_config(turn_context.config.reconnect);\n    let max_retries = match request {\n        ResponsesStreamRequest::Sampling => {\n            codex_config::reconnect_retry_budget(turn_context.config.reconnect, max_retries)\n        }\n        // Keep the dedicated remote-compaction cap.\n        ResponsesStreamRequest::RemoteCompactionV2 => max_retries,\n    };\n    let fixed_delay = fixed_reconnect_delay(&reconnect);\n    if let (Some(fixed), Some(server)) = (fixed_delay, err.server_retry_delay())\n        && server > fixed\n    {\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/core/src/responses_retry.rs",
+      "find": "        .config\n        .features\n        .enabled(Feature::UnboundedConnectionRetries)\n        && matches!(request, ResponsesStreamRequest::Sampling)\n        && matches!(err.details(), CodexErrorDetails::ConnectionFailed(_))\n        && !turn_context.session_source.is_internal()\n",
+      "replace": "        .config\n        .features\n        .enabled(Feature::UnboundedConnectionRetries)\n        && reconnect.max_retries.is_none()\n        && matches!(request, ResponsesStreamRequest::Sampling)\n        && matches!(err.details(), CodexErrorDetails::ConnectionFailed(_))\n        && !turn_context.session_source.is_internal()\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/core/src/shell_snapshot.rs",
+      "find": "    let mut handler = Command::new(&args[0]);\n    handler.args(&args[1..]);\n    handler.stdin(Stdio::null());\n    handler.current_dir(cwd);\n    #[cfg(unix)]\n    {\n",
+      "replace": "    let mut handler = Command::new(&args[0]);\n    handler.args(&args[1..]);\n    handler.stdin(Stdio::null());\n    #[cfg(windows)]\n    codex_utils_pty::hide_console_window(&mut handler);\n    handler.current_dir(cwd);\n    #[cfg(unix)]\n    {\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/core/tests/suite/mod.rs",
+      "find": "mod realtime_sideband_endpoint;\nmod realtime_system_proxy;\nmod reasoning_effort_override;\nmod remote_env;\nmod remote_models;\nmod request_compression;\n",
+      "replace": "mod realtime_sideband_endpoint;\nmod realtime_system_proxy;\nmod reasoning_effort_override;\nmod reconnect_runtime;\nmod remote_env;\nmod remote_models;\nmod request_compression;\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/core/tests/suite/reconnect_runtime.rs",
+      "create": true,
+      "replace": "use anyhow::Result;\nuse codex_config::config_toml::ReconnectConfigToml;\nuse codex_config::config_toml::ReconnectMode;\nuse codex_config::set_reconnect_override;\nuse codex_protocol::protocol::EventMsg;\nuse codex_protocol::turn_input::TurnInputRequest;\nuse codex_protocol::user_input::UserInput;\nuse core_test_support::responses;\nuse core_test_support::test_codex::test_codex;\nuse core_test_support::wait_for_event;\nuse pretty_assertions::assert_eq;\nuse tokio::net::TcpSocket;\nuse wiremock::ResponseTemplate;\n\nstruct ResetOverride;\n\nimpl Drop for ResetOverride {\n    fn drop(&mut self) {\n        set_reconnect_override(/*config*/ None);\n    }\n}\n\n#[tokio::test]\nasync fn reconnect_override_changes_existing_session_and_restores_startup_defaults() -> Result<()> {\n    let _reset = ResetOverride;\n    let server = responses::start_mock_server().await;\n    let response_mock =\n        responses::mount_response_sequence(&server, vec![ResponseTemplate::new(504); 8]).await;\n    let defaults = ReconnectConfigToml {\n        mode: ReconnectMode::Fixed,\n        interval_ms: Some(25),\n        max_retries: Some(1),\n    };\n    let test = test_codex()\n        .with_config(move |config| {\n            config.service_tier = Some(\"flex\".into());\n            config.model_provider.request_max_retries = Some(0);\n            config.model_provider.stream_max_retries = Some(0);\n            config.reconnect = defaults;\n        })\n        .build_with_auto_env(&server)\n        .await?;\n    let config_path = test.config.codex_home.join(\"config.toml\");\n    let original_file = std::fs::read(&config_path).ok();\n    for (runtime, request_count) in [\n        (None, 2),\n        (\n            Some(ReconnectConfigToml {\n                max_retries: Some(0),\n                ..defaults\n            }),\n            3,\n        ),\n        (\n            Some(ReconnectConfigToml {\n                max_retries: Some(2),\n                ..defaults\n            }),\n            6,\n        ),\n        (None, 8),\n    ] {\n        set_reconnect_override(runtime);\n        test.submit_text_turn(\"exercise the current retry budget\")\n            .await?;\n        assert_eq!(response_mock.requests().len(), request_count);\n        assert_eq!(std::fs::read(&config_path).ok(), original_file);\n    }\n    set_reconnect_override(/*config*/ None);\n    assert_eq!(codex_config::effective_reconnect_config(defaults), defaults);\n    Ok(())\n}\n\n#[tokio::test]\nasync fn reconnect_override_bounds_connection_failures_during_an_active_turn() -> Result<()> {\n    let _reset = ResetOverride;\n    let server = responses::start_mock_server().await;\n    let unavailable_socket = TcpSocket::new_v4()?;\n    unavailable_socket.bind(\"127.0.0.1:0\".parse()?)?;\n    let unavailable_address = unavailable_socket.local_addr()?;\n    let defaults = ReconnectConfigToml {\n        mode: ReconnectMode::Fixed,\n        interval_ms: Some(25),\n        max_retries: Some(1),\n    };\n    let test = test_codex()\n        .with_config(move |config| {\n            config.model_provider.base_url = Some(format!(\"http://{unavailable_address}/v1\"));\n            config.model_provider.request_max_retries = Some(0);\n            config.model_provider.supports_websockets = false;\n            config.reconnect = defaults;\n        })\n        .build_with_auto_env(&server)\n        .await?;\n    test.codex\n        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {\n            text: \"stop when the updated retry budget is exhausted\".into(),\n            text_elements: Vec::new(),\n        }]))\n        .await?;\n    let mut retries = 0;\n    loop {\n        let event = wait_for_event(&test.codex, |event| {\n            matches!(event, EventMsg::StreamError(_) | EventMsg::TurnComplete(_))\n        })\n        .await;\n        match event {\n            EventMsg::StreamError(_) => {\n                retries += 1;\n                if retries == 1 {\n                    set_reconnect_override(Some(ReconnectConfigToml {\n                        max_retries: Some(2),\n                        ..defaults\n                    }));\n                }\n            }\n            EventMsg::TurnComplete(event) => {\n                assert!(event.error.is_some());\n                break;\n            }\n            _ => unreachable!(\"only retries and turn completion pass the event filter\"),\n        }\n    }\n    assert_eq!(retries, 2);\n    Ok(())\n}\n"
+    },
+    {
+      "file": "codex-rs/git-utils/src/git_process.rs",
+      "find": "        Ok((child, job)) => (child, Some(job)),\n        Err(_) => {\n            // A failed contained spawn leaves CREATE_SUSPENDED on the command.\n            command.creation_flags(0);\n            (command.spawn().ok()?, None)\n        }\n    };\n",
+      "replace": "        Ok((child, job)) => (child, Some(job)),\n        Err(_) => {\n            // A failed contained spawn leaves CREATE_SUSPENDED on the command.\n            codex_utils_pty::hide_console_window(command);\n            (command.spawn().ok()?, None)\n        }\n    };\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/hooks/src/engine/command_runner.rs",
+      "find": "\n    let mut command = build_command(&runtime.shell, command_line, &runtime.environment, env);\n    command.current_dir(cwd);\n\n    #[cfg(windows)]\n    let mut process_tree_job = JobObject::create().ok();\n",
+      "replace": "\n    let mut command = build_command(&runtime.shell, command_line, &runtime.environment, env);\n    command.current_dir(cwd);\n    #[cfg(windows)]\n    codex_utils_pty::hide_console_window(&mut command);\n\n    #[cfg(windows)]\n    let mut process_tree_job = JobObject::create().ok();\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/hooks/src/engine/command_runner.rs",
+      "find": "            Ok(child) => Ok(child),\n            Err(_) => {\n                process_tree_job = None;\n                command.creation_flags(0);\n                command.spawn()\n            }\n        },\n",
+      "replace": "            Ok(child) => Ok(child),\n            Err(_) => {\n                process_tree_job = None;\n                codex_utils_pty::hide_console_window(&mut command);\n                command.spawn()\n            }\n        },\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/app/event_dispatch.rs",
+      "find": "                    ));\n                }\n            }\n            AppEvent::WriteReconnectConfig {\n                edits,\n                applied,\n                summary,\n            } => match crate::config_update::write_config_batch(app_server.request_handle(), edits)\n                .await\n            {\n                Ok(_) => {\n                    self.chat_widget.apply_reconnect_config(applied);\n                    self.chat_widget.add_info_message(summary, /*hint*/ None);\n                }\n                Err(err) => {\n                    tracing::error!(error = %err, \"failed to persist reconnect settings\");\n                    self.chat_widget.add_error_message(format!(\n                        \"Failed to save reconnect settings: {}\",\n                        format_config_error(&err)\n                    ));\n                }\n            },\n            AppEvent::FetchExperimentalFeatures { thread_id, response_tx } => {\n                self.fetch_experimental_features(app_server, thread_id, response_tx);\n            }\n",
+      "replace": "                    ));\n                }\n            }\n            AppEvent::SetReconnectConfig { applied, summary } => {\n                if matches!(self.app_server_target, AppServerTarget::Embedded) {\n                    codex_config::set_reconnect_override(Some(applied));\n                    self.chat_widget.add_info_message(summary, /*hint*/ None);\n                } else {\n                    self.chat_widget.add_error_message(\n                        \"/reconnect requires a local session started with --no-daemon.\".to_string(),\n                    );\n                }\n            }\n            AppEvent::FetchExperimentalFeatures { thread_id, response_tx } => {\n                self.fetch_experimental_features(app_server, thread_id, response_tx);\n            }\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/app_event.rs",
+      "find": "    /// Update the current approvals reviewer in the running app and widget.\n    UpdateApprovalsReviewer(ApprovalsReviewer),\n\n    /// Persist `/reconnect` overrides and report the applied settings.\n    WriteReconnectConfig {\n        edits: Vec<codex_app_server_protocol::ConfigEdit>,\n        applied: codex_config::config_toml::ReconnectConfigToml,\n        summary: String,\n    },\n",
+      "replace": "    /// Update the current approvals reviewer in the running app and widget.\n    UpdateApprovalsReviewer(ApprovalsReviewer),\n\n    /// Apply reconnect overrides for this process without writing configuration.\n    SetReconnectConfig {\n        applied: codex_config::config_toml::ReconnectConfigToml,\n        summary: String,\n    },\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/chatwidget/reconnect_command.rs",
+      "find": "//! `/reconnect` command: inspect and update stream reconnect settings.\n//!\n//! The command parses its arguments and forwards a `config/batchWrite` request to\n//! the app server, which reloads the user config so the change applies from the\n//! next turn. The widget only reports the resulting settings.\n\nuse super::*;\nuse crate::config_update::clear_config_value;\nuse crate::config_update::replace_config_value;\nuse codex_app_server_protocol::ConfigEdit;\nuse codex_config::config_toml::ReconnectConfigToml;\nuse codex_config::config_toml::ReconnectMode;\nuse serde_json::json;\n\n/// Usage shown as the hint for `/reconnect` and as the error for unknown arguments.\npub(crate) const RECONNECT_USAGE: &str =\n",
+      "replace": "//! `/reconnect` command: inspect and update stream reconnect settings.\n//!\n//! Startup configuration supplies defaults. Commands override the embedded\n//! server's reconnect policy in memory until this CLI process exits.\n\nuse super::*;\nuse codex_config::config_toml::ReconnectConfigToml;\nuse codex_config::config_toml::ReconnectMode;\n\n/// Usage shown as the hint for `/reconnect` and as the error for unknown arguments.\npub(crate) const RECONNECT_USAGE: &str =\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/chatwidget/reconnect_command.rs",
+      "find": "}\n\nimpl ReconnectCommand {\n    /// Config edits for a mutating command, or `None` when the command only reports settings.\n    pub(crate) fn apply(\n        self,\n        current: ReconnectConfigToml,\n    ) -> Option<(Vec<ConfigEdit>, ReconnectConfigToml, String)> {\n        let (edits, applied) = match self {\n            ReconnectCommand::Show => return None,\n            ReconnectCommand::Default => (\n                vec![\n                    replace_config_value(\"reconnect.mode\", json!(\"default\")),\n                    clear_config_value(\"reconnect.interval_ms\"),\n                ],\n                ReconnectConfigToml {\n                    mode: ReconnectMode::Default,\n                    interval_ms: None,\n                    max_retries: current.max_retries,\n                },\n            ),\n            ReconnectCommand::Fixed(interval_ms) => (\n                vec![\n                    replace_config_value(\"reconnect.mode\", json!(\"fixed\")),\n                    replace_config_value(\"reconnect.interval_ms\", json!(interval_ms)),\n                ],\n                ReconnectConfigToml {\n                    mode: ReconnectMode::Fixed,\n                    interval_ms: Some(interval_ms),\n                    max_retries: current.max_retries,\n                },\n            ),\n            ReconnectCommand::Retries(max_retries) => {\n                let edit = match max_retries {\n                    Some(max_retries) => {\n                        replace_config_value(\"reconnect.max_retries\", json!(max_retries))\n                    }\n                    None => clear_config_value(\"reconnect.max_retries\"),\n                };\n                (\n                    vec![edit],\n                    ReconnectConfigToml {\n                        mode: current.mode,\n                        interval_ms: current.interval_ms,\n                        max_retries,\n                    },\n                )\n            }\n        };\n        let summary = reconnect_update_summary(&applied);\n        Some((edits, applied, summary))\n    }\n}\n\n",
+      "replace": "}\n\nimpl ReconnectCommand {\n    /// Resolve an in-memory update, or return no update for a status query.\n    pub(crate) fn apply(\n        self,\n        current: ReconnectConfigToml,\n    ) -> Option<(ReconnectConfigToml, String)> {\n        let applied = match self {\n            Self::Show => return None,\n            Self::Default => ReconnectConfigToml {\n                mode: ReconnectMode::Default,\n                interval_ms: None,\n                ..current\n            },\n            Self::Fixed(interval_ms) => ReconnectConfigToml {\n                mode: ReconnectMode::Fixed,\n                interval_ms: Some(interval_ms),\n                ..current\n            },\n            Self::Retries(max_retries) => ReconnectConfigToml {\n                max_retries,\n                ..current\n            },\n        };\n        let summary = reconnect_update_summary(&applied);\n        Some((applied, summary))\n    }\n}\n\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/chatwidget/reconnect_command.rs",
+      "find": "                     {RECONNECT_USAGE}\"\n                )\n            })?;\n            if max_retries == 0 {\n                return Err(format!(\n                    \"`retries` requires a budget greater than zero; use `retries default` to \\\n                     restore the provider default\\n{RECONNECT_USAGE}\"\n                ));\n            }\n",
+      "replace": "                     {RECONNECT_USAGE}\"\n                )\n            })?;\n            if !(1..=10_000).contains(&max_retries) {\n                return Err(format!(\n                    \"`retries` requires a budget from 1 to 10000; use `retries default` to \\\n                     restore the provider default\\n{RECONNECT_USAGE}\"\n                ));\n            }\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/chatwidget/reconnect_command.rs",
+      "find": "    format!(\"mode={mode}, max_retries={max_retries}\")\n}\n\n/// Single-line confirmation shown after the settings were persisted.\npub(crate) fn reconnect_update_summary(reconnect: &ReconnectConfigToml) -> String {\n    format!(\n        \"Reconnect settings updated: {}; applies from the next turn\",\n        reconnect_status_summary(reconnect)\n    )\n}\n",
+      "replace": "    format!(\"mode={mode}, max_retries={max_retries}\")\n}\n\n/// Single-line confirmation of a process-local override.\npub(crate) fn reconnect_update_summary(reconnect: &ReconnectConfigToml) -> String {\n    format!(\n        \"Reconnect settings updated: {}; active until this process exits; config.toml unchanged\",\n        reconnect_status_summary(reconnect)\n    )\n}\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/chatwidget/reconnect_command.rs",
+      "find": "    pub(super) fn show_reconnect_status(&mut self) {\n        let message = format!(\n            \"Reconnect settings: {}\",\n            reconnect_status_summary(&self.config.reconnect)\n        );\n        self.add_info_message(message, Some(RECONNECT_USAGE.to_string()));\n    }\n\n    /// Parse `/reconnect` arguments and, when they change settings, ask the app to persist them.\n    pub(super) fn handle_reconnect_args(&mut self, args: &str) {\n        let command = match parse_reconnect_args(args) {\n            Ok(command) => command,\n",
+      "replace": "    pub(super) fn show_reconnect_status(&mut self) {\n        let message = format!(\n            \"Reconnect settings: {}\",\n            reconnect_status_summary(&codex_config::effective_reconnect_config(\n                self.config.reconnect\n            ))\n        );\n        self.add_info_message(message, Some(RECONNECT_USAGE.to_string()));\n    }\n\n    /// Parse `/reconnect` arguments and, when they change settings, ask the app to apply them in memory.\n    pub(super) fn handle_reconnect_args(&mut self, args: &str) {\n        let command = match parse_reconnect_args(args) {\n            Ok(command) => command,\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/chatwidget/reconnect_command.rs",
+      "find": "                return;\n            }\n        };\n        let Some((edits, applied, summary)) = command.apply(self.config.reconnect) else {\n            self.show_reconnect_status();\n            return;\n        };\n        self.app_event_tx.send(AppEvent::WriteReconnectConfig {\n            edits,\n            applied,\n            summary,\n        });\n    }\n\n    /// Keep the widget's config snapshot in sync after `/reconnect` persists new settings.\n    pub(crate) fn apply_reconnect_config(&mut self, reconnect: ReconnectConfigToml) {\n        self.config.reconnect = reconnect;\n    }\n}\n",
+      "replace": "                return;\n            }\n        };\n        let Some((applied, summary)) = command.apply(codex_config::effective_reconnect_config(\n            self.config.reconnect,\n        )) else {\n            self.show_reconnect_status();\n            return;\n        };\n        self.app_event_tx\n            .send(AppEvent::SetReconnectConfig { applied, summary });\n    }\n}\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/chatwidget/tests/reconnect_command_tests.rs",
+      "find": "        \"fixed soon\",\n        \"retries 0\",\n        \"retries many\",\n        \"retries\",\n        \"fixed 3000 5000\",\n        \"default 3000\",\n",
+      "replace": "        \"fixed soon\",\n        \"retries 0\",\n        \"retries many\",\n        \"retries 10001\",\n        \"retries\",\n        \"fixed 3000 5000\",\n        \"default 3000\",\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/chatwidget/tests/reconnect_command_tests.rs",
+      "find": "}\n\n#[tokio::test]\nasync fn reconnect_command_with_interval_persists_fixed_mode() {\n    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;\n\n    chat.dispatch_command_with_args(\n",
+      "replace": "}\n\n#[tokio::test]\nasync fn reconnect_command_with_interval_updates_process_only() {\n    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;\n\n    chat.dispatch_command_with_args(\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/chatwidget/tests/reconnect_command_tests.rs",
+      "find": "        Vec::new(),\n    );\n\n    let expected_edits = vec![\n        crate::config_update::replace_config_value(\"reconnect.mode\", serde_json::json!(\"fixed\")),\n        crate::config_update::replace_config_value(\n            \"reconnect.interval_ms\",\n            serde_json::json!(3000),\n        ),\n    ];\n    let expected_applied = ReconnectConfigToml {\n        mode: ReconnectMode::Fixed,\n        interval_ms: Some(3000),\n        max_retries: None,\n    };\n    let expected_summary = \"Reconnect settings updated: mode=fixed every 3000ms, \\\n        max_retries=provider default; applies from the next turn\"\n        .to_string();\n    match rx.try_recv() {\n        Ok(AppEvent::WriteReconnectConfig {\n            edits,\n            applied,\n            summary,\n        }) => {\n            pretty_assertions::assert_eq!(\n                (edits, applied, summary),\n                (expected_edits, expected_applied, expected_summary)\n            );\n        }\n        other => panic!(\"expected reconnect config write, got {other:?}\"),\n    }\n}\n\n",
+      "replace": "        Vec::new(),\n    );\n\n    let expected_applied = ReconnectConfigToml {\n        mode: ReconnectMode::Fixed,\n        interval_ms: Some(3000),\n        max_retries: None,\n    };\n    let expected_summary = \"Reconnect settings updated: mode=fixed every 3000ms, \\\n        max_retries=provider default; active until this process exits; config.toml unchanged\"\n        .to_string();\n    match rx.try_recv() {\n        Ok(AppEvent::SetReconnectConfig { applied, summary }) => {\n            pretty_assertions::assert_eq!(\n                (applied, summary.clone()),\n                (expected_applied, expected_summary)\n            );\n            insta::assert_snapshot!(summary, @\"Reconnect settings updated: mode=fixed every 3000ms, max_retries=provider default; active until this process exits; config.toml unchanged\");\n        }\n        other => panic!(\"expected process reconnect update, got {other:?}\"),\n    }\n}\n\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/tui/src/startup_orchestration.rs",
+      "find": "        return Err(std::io::Error::other(\n            \"--no-daemon cannot be used with --remote.\",\n        ));\n    }\n    if explicit_remote_endpoint.is_some() && !cli.add_dir.is_empty() {\n        return Err(std::io::Error::other(\n",
+      "replace": "        return Err(std::io::Error::other(\n            \"--no-daemon cannot be used with --remote.\",\n        ));\n    }\n    // Reconnect controls belong to this CLI process and its embedded backend.\n    // Do not silently attach this patched CLI to an independently updated daemon.\n    if explicit_remote_endpoint.is_none() && !cli.agents_overview {\n        cli.no_daemon = true;\n    }\n    if explicit_remote_endpoint.is_some() && !cli.add_dir.is_empty() {\n        return Err(std::io::Error::other(\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/utils/pty/src/lib.rs",
+      "find": "mod win;\n#[cfg(windows)]\nmod windows_input;\n\npub const DEFAULT_OUTPUT_BYTES_CAP: usize = 1024 * 1024;\n\n",
+      "replace": "mod win;\n#[cfg(windows)]\nmod windows_input;\n\n/// Suppress console allocation for a background command with captured output.\n#[cfg(windows)]\npub fn hide_console_window(command: &mut tokio::process::Command) {\n    command.creation_flags(winapi::um::winbase::CREATE_NO_WINDOW);\n}\n\npub const DEFAULT_OUTPUT_BYTES_CAP: usize = 1024 * 1024;\n\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/utils/pty/src/win/job.rs",
+      "find": "use winapi::um::jobapi2::TerminateJobObject;\nuse winapi::um::processthreadsapi::OpenProcess;\nuse winapi::um::processthreadsapi::TerminateProcess;\nuse winapi::um::winbase::CREATE_SUSPENDED;\nuse winapi::um::winnt::HANDLE;\nuse winapi::um::winnt::JOB_OBJECT_LIMIT_BREAKAWAY_OK;\n",
+      "replace": "use winapi::um::jobapi2::TerminateJobObject;\nuse winapi::um::processthreadsapi::OpenProcess;\nuse winapi::um::processthreadsapi::TerminateProcess;\nuse winapi::um::winbase::CREATE_NO_WINDOW;\nuse winapi::um::winbase::CREATE_SUSPENDED;\nuse winapi::um::winnt::HANDLE;\nuse winapi::um::winnt::JOB_OBJECT_LIMIT_BREAKAWAY_OK;\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/utils/pty/src/win/job.rs",
+      "find": "\n    /// Prevents a child from running before it can be assigned to this job.\n    pub fn prepare_suspended_spawn(&self, command: &mut Command) {\n        command.creation_flags(CREATE_SUSPENDED).kill_on_drop(true);\n    }\n\n    /// Assigns and resumes a suspended child, returning whether assignment succeeded.\n",
+      "replace": "\n    /// Prevents a child from running before it can be assigned to this job.\n    pub fn prepare_suspended_spawn(&self, command: &mut Command) {\n        command\n            .creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED)\n            .kill_on_drop(true);\n    }\n\n    /// Assigns and resumes a suspended child, returning whether assignment succeeded.\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/utils/pty/src/windows_tests.rs",
+      "find": "            String::from_utf8(output.stdout)?.replace(\"\\r\\n\", \"\\n\"),\n            \"0\\nstdio works\\n\"\n        );\n    }\n    Ok(())\n}\n",
+      "replace": "            String::from_utf8(output.stdout)?.replace(\"\\r\\n\", \"\\n\"),\n            \"0\\nstdio works\\n\"\n        );\n    }\n    // Git, hooks, and credential helpers use the raw Tokio command path.\n    for contained in [false, true] {\n        let mut command = Command::new(&python);\n        command\n            .args([\n                \"-c\",\n                \"import ctypes; print(ctypes.windll.kernel32.GetConsoleWindow())\",\n            ])\n            .stdin(Stdio::null())\n            .stdout(Stdio::piped())\n            .stderr(Stdio::piped());\n        crate::hide_console_window(&mut command);\n        let child = if contained {\n            job.spawn_contained(&mut command)?\n        } else {\n            command.spawn()?\n        };\n        let output = child.wait_with_output().await?;\n        assert!(output.status.success());\n        assert_eq!(String::from_utf8(output.stdout)?.trim(), \"0\");\n    }\n    Ok(())\n}\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/windows-sandbox-rs/src/lib.rs",
+      "find": "                &env_map,\n                logs_base_dir,\n                Some((in_r, out_w, err_w)),\n                ConsoleMode::Inherit,\n                desktop,\n            )\n        });\n",
+      "replace": "                &env_map,\n                logs_base_dir,\n                Some((in_r, out_w, err_w)),\n                ConsoleMode::NoWindow,\n                desktop,\n            )\n        });\n",
+      "expect": 1
+    },
+    {
+      "file": "codex-rs/windows-sandbox-rs/src/unified_exec/backends/legacy.rs",
+      "find": "                StdinMode::Closed\n            },\n            StderrMode::Separate,\n            ConsoleMode::Inherit,\n            launch_desktop,\n            logs_base_dir,\n        )?;\n",
+      "replace": "                StdinMode::Closed\n            },\n            StderrMode::Separate,\n            ConsoleMode::NoWindow,\n            launch_desktop,\n            logs_base_dir,\n        )?;\n",
+      "expect": 1
+    }
+  ]
+}

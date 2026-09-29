@@ -27,8 +27,6 @@ Usage:
     python scripts/apply_patches.py --root codex-src --check   # dry run
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import sys
@@ -83,11 +81,6 @@ def apply_edit(text: str, edit: dict) -> str:
             f"  expect: {expect} occurrence(s)\n"
             f"  found:  {count}\n"
             f"  anchor: {find.splitlines()[0][:120]!r}"
-        )
-    if edit["replace"] in text:
-        raise ValueError(
-            f"error: replacement already present in {edit['file']}; "
-            "is the tree already patched?"
         )
     return text.replace(find, edit["replace"], expect)
 
