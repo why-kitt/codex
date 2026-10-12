@@ -1,6 +1,6 @@
 {
   "name": "runtime-console",
-  "description": "Process-only reconnect controls and hidden Windows background commands.",
+  "description": "Process-only reconnect controls; Windows console fixes are supplied by upstream v0.162.1.",
   "edits": [
     {
       "file": "codex-rs/config/src/lib.rs",
@@ -15,8 +15,8 @@
     },
     {
       "file": "codex-rs/core/config.schema.json",
-      "find": "        }\n      ]\n    },\n    \"ResumeCwdMode\": {\n      \"description\": \"Working directory to use when resuming or forking a session.\",\n      \"oneOf\": [\n",
-      "replace": "        }\n      ]\n    },\n    \"ReconnectConfigToml\": {\n      \"additionalProperties\": false,\n      \"description\": \"Reconnect overrides for model stream retries.\",\n      \"properties\": {\n        \"interval_ms\": {\n          \"description\": \"Constant delay in milliseconds; only used when `mode = \\\"fixed\\\"`.\",\n          \"format\": \"uint64\",\n          \"minimum\": 0.0,\n          \"type\": \"integer\"\n        },\n        \"max_retries\": {\n          \"description\": \"Overrides the provider's `stream_max_retries` budget for this run.\",\n          \"format\": \"uint64\",\n          \"minimum\": 0.0,\n          \"type\": \"integer\"\n        },\n        \"mode\": {\n          \"allOf\": [\n            {\n              \"$ref\": \"#/definitions/ReconnectMode\"\n            }\n          ],\n          \"default\": \"default\",\n          \"description\": \"Delay schedule between reconnect attempts. Defaults to `default`.\"\n        }\n      },\n      \"type\": \"object\"\n    },\n    \"ReconnectMode\": {\n      \"description\": \"Selects the delay schedule used between model stream reconnect attempts.\",\n      \"oneOf\": [\n        {\n          \"description\": \"Exponential backoff with jitter, matching the built-in behavior.\",\n          \"enum\": [\n            \"default\"\n          ],\n          \"type\": \"string\"\n        },\n        {\n          \"description\": \"Sleep for a constant `interval_ms` on every attempt.\",\n          \"enum\": [\n            \"fixed\"\n          ],\n          \"type\": \"string\"\n        }\n      ]\n    },\n    \"ResumeCwdMode\": {\n      \"description\": \"Working directory to use when resuming or forking a session.\",\n      \"oneOf\": [\n",
+      "find": "    \"RemoteCompactionSupport\": {\n",
+      "replace": "    \"ReconnectConfigToml\": {\n      \"additionalProperties\": false,\n      \"description\": \"Reconnect overrides for model stream retries.\",\n      \"properties\": {\n        \"interval_ms\": {\n          \"description\": \"Constant delay in milliseconds; only used when `mode = \\\"fixed\\\"`.\",\n          \"format\": \"uint64\",\n          \"minimum\": 0.0,\n          \"type\": \"integer\"\n        },\n        \"max_retries\": {\n          \"description\": \"Overrides the provider's `stream_max_retries` budget for this run.\",\n          \"format\": \"uint64\",\n          \"minimum\": 0.0,\n          \"type\": \"integer\"\n        },\n        \"mode\": {\n          \"allOf\": [\n            {\n              \"$ref\": \"#/definitions/ReconnectMode\"\n            }\n          ],\n          \"default\": \"default\",\n          \"description\": \"Delay schedule between reconnect attempts. Defaults to `default`.\"\n        }\n      },\n      \"type\": \"object\"\n    },\n    \"ReconnectMode\": {\n      \"description\": \"Selects the delay schedule used between model stream reconnect attempts.\",\n      \"oneOf\": [\n        {\n          \"description\": \"Exponential backoff with jitter, matching the built-in behavior.\",\n          \"enum\": [\n            \"default\"\n          ],\n          \"type\": \"string\"\n        },\n        {\n          \"description\": \"Sleep for a constant `interval_ms` on every attempt.\",\n          \"enum\": [\n            \"fixed\"\n          ],\n          \"type\": \"string\"\n        }\n      ]\n    },\n    \"RemoteCompactionSupport\": {\n",
       "expect": 1
     },
     {
@@ -56,12 +56,6 @@
       "expect": 1
     },
     {
-      "file": "codex-rs/core/src/shell_snapshot.rs",
-      "find": "    let mut handler = Command::new(&args[0]);\n    handler.args(&args[1..]);\n    handler.stdin(Stdio::null());\n    handler.current_dir(cwd);\n    #[cfg(unix)]\n    {\n",
-      "replace": "    let mut handler = Command::new(&args[0]);\n    handler.args(&args[1..]);\n    handler.stdin(Stdio::null());\n    #[cfg(windows)]\n    codex_utils_pty::hide_console_window(&mut handler);\n    handler.current_dir(cwd);\n    #[cfg(unix)]\n    {\n",
-      "expect": 1
-    },
-    {
       "file": "codex-rs/core/tests/suite/mod.rs",
       "find": "mod realtime_sideband_endpoint;\nmod realtime_system_proxy;\nmod reasoning_effort_override;\nmod remote_env;\nmod remote_models;\nmod request_compression;\n",
       "replace": "mod realtime_sideband_endpoint;\nmod realtime_system_proxy;\nmod reasoning_effort_override;\nmod reconnect_runtime;\nmod remote_env;\nmod remote_models;\nmod request_compression;\n",
@@ -71,24 +65,6 @@
       "file": "codex-rs/core/tests/suite/reconnect_runtime.rs",
       "create": true,
       "replace": "use anyhow::Result;\nuse codex_config::config_toml::ReconnectConfigToml;\nuse codex_config::config_toml::ReconnectMode;\nuse codex_config::set_reconnect_override;\nuse codex_protocol::protocol::EventMsg;\nuse codex_protocol::turn_input::TurnInputRequest;\nuse codex_protocol::user_input::UserInput;\nuse core_test_support::responses;\nuse core_test_support::test_codex::test_codex;\nuse core_test_support::wait_for_event;\nuse pretty_assertions::assert_eq;\nuse tokio::net::TcpSocket;\nuse wiremock::ResponseTemplate;\n\nstruct ResetOverride;\n\nimpl Drop for ResetOverride {\n    fn drop(&mut self) {\n        set_reconnect_override(/*config*/ None);\n    }\n}\n\n#[tokio::test]\nasync fn reconnect_override_changes_existing_session_and_restores_startup_defaults() -> Result<()> {\n    let _reset = ResetOverride;\n    let server = responses::start_mock_server().await;\n    let response_mock =\n        responses::mount_response_sequence(&server, vec![ResponseTemplate::new(504); 8]).await;\n    let defaults = ReconnectConfigToml {\n        mode: ReconnectMode::Fixed,\n        interval_ms: Some(25),\n        max_retries: Some(1),\n    };\n    let test = test_codex()\n        .with_config(move |config| {\n            config.service_tier = Some(\"flex\".into());\n            config.model_provider.request_max_retries = Some(0);\n            config.model_provider.stream_max_retries = Some(0);\n            config.reconnect = defaults;\n        })\n        .build_with_auto_env(&server)\n        .await?;\n    let config_path = test.config.codex_home.join(\"config.toml\");\n    let original_file = std::fs::read(&config_path).ok();\n    for (runtime, request_count) in [\n        (None, 2),\n        (\n            Some(ReconnectConfigToml {\n                max_retries: Some(0),\n                ..defaults\n            }),\n            3,\n        ),\n        (\n            Some(ReconnectConfigToml {\n                max_retries: Some(2),\n                ..defaults\n            }),\n            6,\n        ),\n        (None, 8),\n    ] {\n        set_reconnect_override(runtime);\n        test.submit_text_turn(\"exercise the current retry budget\")\n            .await?;\n        assert_eq!(response_mock.requests().len(), request_count);\n        assert_eq!(std::fs::read(&config_path).ok(), original_file);\n    }\n    set_reconnect_override(/*config*/ None);\n    assert_eq!(codex_config::effective_reconnect_config(defaults), defaults);\n    Ok(())\n}\n\n#[tokio::test]\nasync fn reconnect_override_bounds_connection_failures_during_an_active_turn() -> Result<()> {\n    let _reset = ResetOverride;\n    let server = responses::start_mock_server().await;\n    let unavailable_socket = TcpSocket::new_v4()?;\n    unavailable_socket.bind(\"127.0.0.1:0\".parse()?)?;\n    let unavailable_address = unavailable_socket.local_addr()?;\n    let defaults = ReconnectConfigToml {\n        mode: ReconnectMode::Fixed,\n        interval_ms: Some(25),\n        max_retries: Some(1),\n    };\n    let test = test_codex()\n        .with_config(move |config| {\n            config.model_provider.base_url = Some(format!(\"http://{unavailable_address}/v1\"));\n            config.model_provider.request_max_retries = Some(0);\n            config.model_provider.supports_websockets = false;\n            config.reconnect = defaults;\n        })\n        .build_with_auto_env(&server)\n        .await?;\n    test.codex\n        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {\n            text: \"stop when the updated retry budget is exhausted\".into(),\n            text_elements: Vec::new(),\n        }]))\n        .await?;\n    let mut retries = 0;\n    loop {\n        let event = wait_for_event(&test.codex, |event| {\n            matches!(event, EventMsg::StreamError(_) | EventMsg::TurnComplete(_))\n        })\n        .await;\n        match event {\n            EventMsg::StreamError(_) => {\n                retries += 1;\n                if retries == 1 {\n                    set_reconnect_override(Some(ReconnectConfigToml {\n                        max_retries: Some(2),\n                        ..defaults\n                    }));\n                }\n            }\n            EventMsg::TurnComplete(event) => {\n                assert!(event.error.is_some());\n                break;\n            }\n            _ => unreachable!(\"only retries and turn completion pass the event filter\"),\n        }\n    }\n    assert_eq!(retries, 2);\n    Ok(())\n}\n"
-    },
-    {
-      "file": "codex-rs/git-utils/src/git_process.rs",
-      "find": "        Ok((child, job)) => (child, Some(job)),\n        Err(_) => {\n            // A failed contained spawn leaves CREATE_SUSPENDED on the command.\n            command.creation_flags(0);\n            (command.spawn().ok()?, None)\n        }\n    };\n",
-      "replace": "        Ok((child, job)) => (child, Some(job)),\n        Err(_) => {\n            // A failed contained spawn leaves CREATE_SUSPENDED on the command.\n            codex_utils_pty::hide_console_window(command);\n            (command.spawn().ok()?, None)\n        }\n    };\n",
-      "expect": 1
-    },
-    {
-      "file": "codex-rs/hooks/src/engine/command_runner.rs",
-      "find": "\n    let mut command = build_command(&runtime.shell, command_line, &runtime.environment, env);\n    command.current_dir(cwd);\n\n    #[cfg(windows)]\n    let mut process_tree_job = JobObject::create().ok();\n",
-      "replace": "\n    let mut command = build_command(&runtime.shell, command_line, &runtime.environment, env);\n    command.current_dir(cwd);\n    #[cfg(windows)]\n    codex_utils_pty::hide_console_window(&mut command);\n\n    #[cfg(windows)]\n    let mut process_tree_job = JobObject::create().ok();\n",
-      "expect": 1
-    },
-    {
-      "file": "codex-rs/hooks/src/engine/command_runner.rs",
-      "find": "            Ok(child) => Ok(child),\n            Err(_) => {\n                process_tree_job = None;\n                command.creation_flags(0);\n                command.spawn()\n            }\n        },\n",
-      "replace": "            Ok(child) => Ok(child),\n            Err(_) => {\n                process_tree_job = None;\n                codex_utils_pty::hide_console_window(&mut command);\n                command.spawn()\n            }\n        },\n",
-      "expect": 1
     },
     {
       "file": "codex-rs/tui/src/app/event_dispatch.rs",
@@ -160,42 +136,6 @@
       "file": "codex-rs/tui/src/startup_orchestration.rs",
       "find": "        return Err(std::io::Error::other(\n            \"--no-daemon cannot be used with --remote.\",\n        ));\n    }\n    if explicit_remote_endpoint.is_some() && !cli.add_dir.is_empty() {\n        return Err(std::io::Error::other(\n",
       "replace": "        return Err(std::io::Error::other(\n            \"--no-daemon cannot be used with --remote.\",\n        ));\n    }\n    // Reconnect controls belong to this CLI process and its embedded backend.\n    // Do not silently attach this patched CLI to an independently updated daemon.\n    if explicit_remote_endpoint.is_none() && !cli.agents_overview {\n        cli.no_daemon = true;\n    }\n    if explicit_remote_endpoint.is_some() && !cli.add_dir.is_empty() {\n        return Err(std::io::Error::other(\n",
-      "expect": 1
-    },
-    {
-      "file": "codex-rs/utils/pty/src/lib.rs",
-      "find": "mod win;\n#[cfg(windows)]\nmod windows_input;\n\npub const DEFAULT_OUTPUT_BYTES_CAP: usize = 1024 * 1024;\n\n",
-      "replace": "mod win;\n#[cfg(windows)]\nmod windows_input;\n\n/// Suppress console allocation for a background command with captured output.\n#[cfg(windows)]\npub fn hide_console_window(command: &mut tokio::process::Command) {\n    command.creation_flags(winapi::um::winbase::CREATE_NO_WINDOW);\n}\n\npub const DEFAULT_OUTPUT_BYTES_CAP: usize = 1024 * 1024;\n\n",
-      "expect": 1
-    },
-    {
-      "file": "codex-rs/utils/pty/src/win/job.rs",
-      "find": "use winapi::um::jobapi2::TerminateJobObject;\nuse winapi::um::processthreadsapi::OpenProcess;\nuse winapi::um::processthreadsapi::TerminateProcess;\nuse winapi::um::winbase::CREATE_SUSPENDED;\nuse winapi::um::winnt::HANDLE;\nuse winapi::um::winnt::JOB_OBJECT_LIMIT_BREAKAWAY_OK;\n",
-      "replace": "use winapi::um::jobapi2::TerminateJobObject;\nuse winapi::um::processthreadsapi::OpenProcess;\nuse winapi::um::processthreadsapi::TerminateProcess;\nuse winapi::um::winbase::CREATE_NO_WINDOW;\nuse winapi::um::winbase::CREATE_SUSPENDED;\nuse winapi::um::winnt::HANDLE;\nuse winapi::um::winnt::JOB_OBJECT_LIMIT_BREAKAWAY_OK;\n",
-      "expect": 1
-    },
-    {
-      "file": "codex-rs/utils/pty/src/win/job.rs",
-      "find": "\n    /// Prevents a child from running before it can be assigned to this job.\n    pub fn prepare_suspended_spawn(&self, command: &mut Command) {\n        command.creation_flags(CREATE_SUSPENDED).kill_on_drop(true);\n    }\n\n    /// Assigns and resumes a suspended child, returning whether assignment succeeded.\n",
-      "replace": "\n    /// Prevents a child from running before it can be assigned to this job.\n    pub fn prepare_suspended_spawn(&self, command: &mut Command) {\n        command\n            .creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED)\n            .kill_on_drop(true);\n    }\n\n    /// Assigns and resumes a suspended child, returning whether assignment succeeded.\n",
-      "expect": 1
-    },
-    {
-      "file": "codex-rs/utils/pty/src/windows_tests.rs",
-      "find": "            String::from_utf8(output.stdout)?.replace(\"\\r\\n\", \"\\n\"),\n            \"0\\nstdio works\\n\"\n        );\n    }\n    Ok(())\n}\n",
-      "replace": "            String::from_utf8(output.stdout)?.replace(\"\\r\\n\", \"\\n\"),\n            \"0\\nstdio works\\n\"\n        );\n    }\n    // Git, hooks, and credential helpers use the raw Tokio command path.\n    for contained in [false, true] {\n        let mut command = Command::new(&python);\n        command\n            .args([\n                \"-c\",\n                \"import ctypes; print(ctypes.windll.kernel32.GetConsoleWindow())\",\n            ])\n            .stdin(Stdio::null())\n            .stdout(Stdio::piped())\n            .stderr(Stdio::piped());\n        crate::hide_console_window(&mut command);\n        let child = if contained {\n            job.spawn_contained(&mut command)?\n        } else {\n            command.spawn()?\n        };\n        let output = child.wait_with_output().await?;\n        assert!(output.status.success());\n        assert_eq!(String::from_utf8(output.stdout)?.trim(), \"0\");\n    }\n    Ok(())\n}\n",
-      "expect": 1
-    },
-    {
-      "file": "codex-rs/windows-sandbox-rs/src/lib.rs",
-      "find": "                &env_map,\n                logs_base_dir,\n                Some((in_r, out_w, err_w)),\n                ConsoleMode::Inherit,\n                desktop,\n            )\n        });\n",
-      "replace": "                &env_map,\n                logs_base_dir,\n                Some((in_r, out_w, err_w)),\n                ConsoleMode::NoWindow,\n                desktop,\n            )\n        });\n",
-      "expect": 1
-    },
-    {
-      "file": "codex-rs/windows-sandbox-rs/src/unified_exec/backends/legacy.rs",
-      "find": "                StdinMode::Closed\n            },\n            StderrMode::Separate,\n            ConsoleMode::Inherit,\n            launch_desktop,\n            logs_base_dir,\n        )?;\n",
-      "replace": "                StdinMode::Closed\n            },\n            StderrMode::Separate,\n            ConsoleMode::NoWindow,\n            launch_desktop,\n            logs_base_dir,\n        )?;\n",
       "expect": 1
     }
   ]

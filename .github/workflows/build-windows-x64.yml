@@ -48,7 +48,11 @@ jobs:
           else
             tag="$(gh api repos/openai/codex/releases/latest --jq '.tag_name')"
           fi
-          commit="$(git ls-remote https://github.com/openai/codex.git "refs/tags/${tag}" | cut -f1)"
+          refs="$(git ls-remote https://github.com/openai/codex.git "refs/tags/${tag}" "refs/tags/${tag}^{}")"
+          commit="$(printf '%s\n' "${refs}" | awk '$2 ~ /\^\{\}$/ {print $1}')"
+          if [ -z "${commit}" ]; then
+            commit="$(printf '%s\n' "${refs}" | awk '$2 !~ /\^\{\}$/ {print $1}')"
+          fi
           if [ -z "${commit}" ]; then
             echo "unknown openai/codex tag: ${tag}" >&2
             exit 1
@@ -100,7 +104,7 @@ jobs:
           cd codex-src/codex-rs
           cargo metadata --format-version 1 > /dev/null
           cd ../..
-          changed="$(git --no-pager diff --unified=0 -- codex-src/codex-rs/Cargo.lock \
+          changed="$(git -C codex-src --no-pager diff --unified=0 -- codex-rs/Cargo.lock \
             | grep -E '^[+-][^+-]' || true)"
           unexpected="$(printf '%s\n' "${changed}" | grep -vE '^[+-]version = "[^"]*"$' || true)"
           if [ -n "${unexpected}" ]; then
@@ -109,7 +113,7 @@ jobs:
             exit 1
           fi
           echo "Cargo.lock refresh delta:"
-          git --no-pager diff --stat -- codex-src/codex-rs/Cargo.lock
+          git -C codex-src --no-pager diff --stat -- codex-rs/Cargo.lock
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
@@ -305,7 +309,12 @@ jobs:
           Adds the [reconnect] config table (mode = default | fixed, interval_ms, max_retries),
           raises the stream_max_retries hard cap to 10000, and adds process-local TUI /reconnect controls.
           Overrides apply until CLI exit without changing config.toml. Explicit retry limits also bound
-          failed network connections. Background Windows commands preserve hidden-console flags.
+          failed network connections. Windows background console fixes are supplied by upstream.
+
+          Adds opt-in custom-provider capabilities.stateless_responses for rotating upstream
+          resources: clears item IDs and encrypted reasoning on outbound copies, preserves
+          tool call IDs, uses full-history HTTP and local compaction, and applies to child agents.
+          Existing opaque remote compaction history is rejected rather than silently discarded.
 
           The zip is a complete package (bin/codex.exe, bin/codex-code-mode-host.exe,
           codex-path, codex-resources). Extract it and run bin/codex.exe; local sessions use
