@@ -316,6 +316,10 @@ jobs:
           tool call IDs, uses full-history HTTP and local compaction, and applies to child agents.
           Existing opaque remote compaction history is rejected rather than silently discarded.
 
+          Adds opt-in [agents] inherit_full_access = true: synchronizes root Full Access
+          to existing, new, and reloaded subagents, including their subsequent tool calls.
+          Later root restrictions propagate too; existing policy constraints remain enforced.
+
           The zip is a complete package (bin/codex.exe, bin/codex-code-mode-host.exe,
           codex-path, codex-resources). Extract it and run bin/codex.exe; local sessions use
           the patched embedded backend automatically. AnySearch/code-mode tools use the bundled host."

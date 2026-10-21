@@ -9,6 +9,7 @@
 patches/reconnect.json                    # 基础重连补丁
 patches/runtime-console.json              # 进程内重连设置与 Windows 后台命令窗口修复
 patches/stateless-responses.json           # 轮换上游资源的中转站兼容模式
+patches/subagent-full-access.json          # 主对话 Full Access 权限同步
 scripts/apply_patches.py                  # 补丁应用器（断言锚点唯一命中；支持新建文件）
 ```
 
@@ -16,7 +17,7 @@ scripts/apply_patches.py                  # 补丁应用器（断言锚点唯一
 
 1. 把本目录内容推到你的私有仓库。
 2. GitHub → Actions → **Build patched Windows x64** → **Run workflow**。
-   - `tag` 留空 = 取 `openai/codex` 最新正式 release；本版已适配 `rust-v0.162.1`（2026-10-09 发布，源码 commit `092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`）。指定这个 tag 可复现本版验证；其他版本须重新核对锚点。
+   - `tag` 留空 = 取 `openai/codex` 最新正式 release；本版已适配 `rust-v0.163.0`（2026-10-15 发布，源码 commit `83086188ae0614bd882818ff1aa23f3194962012`）。指定这个 tag 可复现本版验证；其他版本须重新核对锚点。
    - `publish_release` 控制是否发 Release（只跑构建时取消勾选，省存储）。
 3. 产物：
    - **Artifact** `codex-windows-x64`（保留 7 天）：`codex-<tag>-windows-x64.zip`（完整包）+ `.patch`（打过的完整 diff）。
@@ -100,12 +101,33 @@ stateless_responses = true
 
 这是客户端的可移植历史兼容模式，不会控制中转站选路，也不保证支持中转站私有工具或其他资源绑定资产。开启后建议新建会话；已经运行的进程需要重启才能加载新配置。
 
+## 子代理继承 Full Access
+
+在 `config.toml` 中启用，重新启动 Codex 后生效：
+
+```toml
+[agents]
+inherit_full_access = true
+```
+
+默认关闭。启用后，主对话选择 Full Access 时，同一代理树中的已有、新建及重新加载的子代理同步执行权限；主对话启动时已经是 Full Access 也会继承。首次启用 Full Access 后，主对话切回受限权限也同步子代理。
+
+已有子代理的后续工具调用和未来轮次使用新权限，已经启动的工具进程沿用启动时的权限。同步保留子代理的模型、角色、执行环境和工作目录，通过现有的权限约束校验；无法同步时发出警告。内部审查代理保留自身策略。
+
+针对两种子代理后端、开关关闭、运行中工具调用和卸载后重新加载的回归测试：
+
+```powershell
+just test -p codex-core --test subagent_permissions
+```
+
 ## 成本注意（GitHub Free）
 
 - Windows runner 计时按 **2 倍**分钟数消耗（2000 分钟/月 ≈ 1000 Windows 分钟），单次冷构建约 **60–120 分钟**（缓存命中后约 20–40 分钟）。
 - 日志在大 crate（`codex-core`、`codex-tui`）编译期间会长时间没有新输出，这是正常的；5 分钟一行的 `rustc_cpu_s` 心跳会持续刷新，构建步超时 170 分钟、job 总超时 240 分钟。
 - Artifact 存储免费额度 500 MB，完整包 zip 含 4 个二进制，打包后仍在额度内，并且只保留 7 天。
 - 超额后 Actions 直接不可用（默认 $0 上限，不会扣费）。
+
+本次 tag 适配的验证结果及未执行检查见 [VALIDATION.md](VALIDATION.md)。
 
 ## 补丁维护
 

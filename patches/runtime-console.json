@@ -1,6 +1,6 @@
 {
   "name": "runtime-console",
-  "description": "Process-only reconnect controls; Windows console fixes are supplied by upstream v0.162.1.",
+  "description": "Process-only reconnect controls; Windows console fixes are supplied by upstream v0.163.0.",
   "edits": [
     {
       "file": "codex-rs/config/src/lib.rs",
@@ -33,8 +33,8 @@
     },
     {
       "file": "codex-rs/core/src/compact_remote_v2.rs",
-      "find": "    responses_metadata: &CodexResponsesMetadata,\n) -> CodexResult<RemoteCompactionV2Output> {\n    let turn_context = &step_context.turn;\n    let max_retries = turn_context\n        .provider\n        .info()\n        .stream_max_retries()\n        .min(MAX_REMOTE_COMPACTION_V2_STREAM_RETRIES);\n    let mut retry_state = ResponsesStreamRetryState::default();\n    loop {\n        let result = match client_session\n",
-      "replace": "    responses_metadata: &CodexResponsesMetadata,\n) -> CodexResult<RemoteCompactionV2Output> {\n    let turn_context = &step_context.turn;\n    let max_retries = codex_config::reconnect_retry_budget(\n        turn_context.config.reconnect,\n        turn_context.provider.info().stream_max_retries(),\n    )\n    .min(MAX_REMOTE_COMPACTION_V2_STREAM_RETRIES);\n    let mut retry_state = ResponsesStreamRetryState::default();\n    loop {\n        let result = match client_session\n",
+      "find": "    let max_retries = turn_context\n        .provider\n        .info()\n        .stream_max_retries()\n        .min(MAX_REMOTE_COMPACTION_V2_STREAM_RETRIES);\n",
+      "replace": "    let max_retries = codex_config::reconnect_retry_budget(\n        turn_context.config.reconnect,\n        turn_context.provider.info().stream_max_retries(),\n    )\n    .min(MAX_REMOTE_COMPACTION_V2_STREAM_RETRIES);\n",
       "expect": 1
     },
     {
