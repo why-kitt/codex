@@ -41,6 +41,8 @@ codex-resources/codex-windows-sandbox-setup.exe
 
 流水线从上游 `codex-rs/rust-toolchain.toml` 读取 Rust 版本（本版为 `1.99.1`），并显式构建、打包 `codex-exec-server.exe`，避免打包步骤另行启动默认配置的 Cargo 构建。
 
+Windows CI 在依赖解析前启用 Git 长路径，并设置 `CARGO_NET_GIT_FETCH_WITH_CLI=true`，与上游 `setup-ci` 一致，支持检出新版 `rusty_v8` 的 Chromium/Rust 子模块。
+
 上游如果重构了锚点代码，`apply_patches.py` 会直接报锚点命中数不符并让构建失败（不会输出半打补丁的产物）。
 
 ## `[reconnect]` 启动默认配置

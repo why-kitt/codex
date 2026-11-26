@@ -22,6 +22,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Match upstream setup-ci: Cargo must use Git's Windows long-path support
+  # when fetching rusty_v8 and its Chromium/Rust submodules.
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 jobs:
   build:
@@ -34,6 +37,10 @@ jobs:
     steps:
       - name: Checkout this repository
         uses: actions/checkout@v4
+
+      - name: Enable Git long paths (Windows)
+        shell: pwsh
+        run: git config --global core.longpaths true
 
       - name: Resolve upstream tag
         id: resolve
