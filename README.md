@@ -17,7 +17,7 @@ scripts/apply_patches.py                  # 补丁应用器（断言锚点唯一
 
 1. 把本目录内容推到你的私有仓库。
 2. GitHub → Actions → **Build patched Windows x64** → **Run workflow**。
-   - `tag` 留空 = 取 `openai/codex` 最新正式 release；本版已适配 `rust-v0.163.0`（2026-10-15 发布，源码 commit `83086188ae0614bd882818ff1aa23f3194962012`）。指定这个 tag 可复现本版验证；其他版本须重新核对锚点。
+   - `tag` 留空 = 取 `openai/codex` 最新正式 release；本版已适配 `rust-v0.172.0`（2026-11-24 发布，源码 commit `3d86e43b075adeba2193ec5c22ac92f55afd82e6`）。指定这个 tag 可复现本版轻量检查；其他版本须重新核对锚点和接口。
    - `publish_release` 控制是否发 Release（只跑构建时取消勾选，省存储）。
 3. 产物：
    - **Artifact** `codex-windows-x64`（保留 7 天）：`codex-<tag>-windows-x64.zip`（完整包）+ `.patch`（打过的完整 diff）。
@@ -31,12 +31,15 @@ zip 由官方 `scripts/build_codex_package.py` 组装，和 `openai/codex` 发�
 codex-package.json                      # daemon 识别包用的 manifest
 bin/codex.exe                           # 入口
 bin/codex-code-mode-host.exe            # code mode / AnySearch 宿主
+bin/codex-exec-server.exe               # 上游新增的独立执行服务
 codex-path/rg.exe                       # 打包时自动下载（DotSlash manifest）
 codex-resources/codex-command-runner.exe
 codex-resources/codex-windows-sandbox-setup.exe
 ```
 
 解压后直接运行 `bin\codex.exe`。普通本地会话默认使用**进程内后端**，不会接入或自动安装共享 daemon，避免前台有补丁而后台被官方更新替换。AnySearch/命令工具从完整包中解析宿主。显式远程会话和 `codex agents` 保留上游行为；远程会话不支持本地 `/reconnect` 覆盖。
+
+流水线从上游 `codex-rs/rust-toolchain.toml` 读取 Rust 版本（本版为 `1.99.1`），并显式构建、打包 `codex-exec-server.exe`，避免打包步骤另行启动默认配置的 Cargo 构建。
 
 上游如果重构了锚点代码，`apply_patches.py` 会直接报锚点命中数不符并让构建失败（不会输出半打补丁的产物）。
 
@@ -124,16 +127,16 @@ just test -p codex-core --test subagent_permissions
 
 - Windows runner 计时按 **2 倍**分钟数消耗（2000 分钟/月 ≈ 1000 Windows 分钟），单次冷构建约 **60–120 分钟**（缓存命中后约 20–40 分钟）。
 - 日志在大 crate（`codex-core`、`codex-tui`）编译期间会长时间没有新输出，这是正常的；5 分钟一行的 `rustc_cpu_s` 心跳会持续刷新，构建步超时 170 分钟、job 总超时 240 分钟。
-- Artifact 存储免费额度 500 MB，完整包 zip 含 4 个二进制，打包后仍在额度内，并且只保留 7 天。
+- Artifact 存储免费额度 500 MB，完整包 zip 含 5 个 Codex 二进制及 `rg.exe`，只保留 7 天。
 - 超额后 Actions 直接不可用（默认 $0 上限，不会扣费）。
 
 本次 tag 适配的验证结果及未执行检查见 [VALIDATION.md](VALIDATION.md)。
 
 ## 补丁维护
 
-修改代码逻辑时：
+适配新 release 时先做轻量检查，将完整构建交给 GitHub Actions：
 
-1. 本地 checkout 同一 tag，跑 `python scripts/apply_patches.py --root <checkout>`。
-2. 改代码 → `just fmt` / `just clippy -p <crate>` / `just test -p <crate>` 验证；新增中转模式可用 `just test -p codex-core -E 'test(stateless_responses)'` 跑针对性回归。
+1. 本地 checkout 同一 tag，跑 `python scripts/apply_patches.py --root <checkout> --check`，一次列出失效锚点。
+2. 核对上游构造器、请求参数、配置结构和打包接口；新建文件中的代码也需要核对。用现有 `rustfmt` 做语法与格式检查，不必为版本适配先全量编译。行为变更需要时再跑针对性回归。
 3. 把每处改动的原文（`find`）和新文（`replace`）追加进对应补丁 JSON，`expect` 保持 `1`；补丁按文件名顺序应用，后续锚点应匹配前序补丁的结果。
-4. `python scripts/apply_patches.py --root <干净 checkout> --check` 验证所有锚点仍然唯一命中。
+4. 在干净 checkout 上检查并应用补丁，核对最终 diff；更新 [VALIDATION.md](VALIDATION.md)，明确本次执行及跳过的检查。

@@ -88,10 +88,19 @@ jobs:
           echo "patched files:"
           git -C codex-src --no-pager diff --stat
 
+      - name: Resolve upstream Rust toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          channel="$(python -c 'import tomllib; print(tomllib.load(open("codex-src/codex-rs/rust-toolchain.toml", "rb"))["toolchain"]["channel"])')"
+          echo "channel=${channel}" >> "${GITHUB_OUTPUT}"
+          echo "Using upstream Rust toolchain: ${channel}"
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.95.0"
+          toolchain: ${{ steps.toolchain.outputs.channel }}
 
       - name: Refresh Cargo.lock for the release tag
         shell: bash
@@ -237,10 +246,11 @@ jobs:
             cargo build --release --locked -p codex-cli --bin codex
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             # Helper binaries the packaged layout requires (validate_package):
-            # codex-code-mode-host (AnySearch/code mode), codex-command-runner
-            # and codex-windows-sandbox-setup (codex-resources). Shares deps
+            # codex-code-mode-host (AnySearch/code mode), codex-exec-server,
+            # codex-command-runner and codex-windows-sandbox-setup. Shares deps
             # with codex.exe, so this is only minutes of incremental build.
-            cargo build --release --locked -p codex-code-mode-host -p codex-windows-sandbox
+            cargo build --release --locked -p codex-code-mode-host -p codex-exec-server-cli -p codex-windows-sandbox `
+              --bin codex-code-mode-host --bin codex-exec-server --bin codex-command-runner --bin codex-windows-sandbox-setup
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } finally {
             Stop-Process -Id $beat.Id -Force -ErrorAction SilentlyContinue
@@ -257,6 +267,7 @@ jobs:
         run: |
           # Assemble the same canonical package layout openai/codex ships:
           #   codex-package.json, bin/codex.exe, bin/codex-code-mode-host.exe,
+          #   bin/codex-exec-server.exe,
           #   codex-path/rg.exe (auto-fetched), codex-resources/*.exe
           # The complete layout resolves the code-mode host (AnySearch) and
           # sandbox helpers. Local TUI sessions use the patched embedded backend.
@@ -272,6 +283,7 @@ jobs:
             --package-version $version `
             --entrypoint-bin "$release\codex.exe" `
             --code-mode-host-bin "$release\codex-code-mode-host.exe" `
+            --exec-server-bin "$release\codex-exec-server.exe" `
             --codex-command-runner-bin "$release\codex-command-runner.exe" `
             --codex-windows-sandbox-setup-bin "$release\codex-windows-sandbox-setup.exe" `
             --package-dir "$env:RUNNER_TEMP\codex-package" `
@@ -321,6 +333,7 @@ jobs:
           Later root restrictions propagate too; existing policy constraints remain enforced.
 
           The zip is a complete package (bin/codex.exe, bin/codex-code-mode-host.exe,
+          bin/codex-exec-server.exe,
           codex-path, codex-resources). Extract it and run bin/codex.exe; local sessions use
           the patched embedded backend automatically. AnySearch/code-mode tools use the bundled host."
           if gh release view "${release}" >/dev/null 2>&1; then

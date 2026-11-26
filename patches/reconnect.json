@@ -16,8 +16,8 @@
     },
     {
       "file": "codex-rs/core/src/config/mod.rs",
-      "find": "use codex_config::config_toml::RealtimeConfig;\nuse codex_config::config_toml::ThreadStoreToml;\n",
-      "replace": "use codex_config::config_toml::RealtimeConfig;\nuse codex_config::config_toml::ReconnectConfigToml;\nuse codex_config::config_toml::ReconnectMode;\nuse codex_config::config_toml::ThreadStoreToml;\n",
+      "find": "use codex_config::config_toml::RealtimeConfig;\n",
+      "replace": "use codex_config::config_toml::RealtimeConfig;\nuse codex_config::config_toml::ReconnectConfigToml;\nuse codex_config::config_toml::ReconnectMode;\n",
       "expect": 1
     },
     {
@@ -28,8 +28,8 @@
     },
     {
       "file": "codex-rs/core/src/config/mod.rs",
-      "find": "        let model_providers =\n            merge_configured_model_providers(built_in_model_providers(openai_base_url), cfg.model_providers)\n                .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidData, message))?;\n\n        let model_provider_id = config_layer_stack.required_model_provider().map(str::to_string)\n",
-      "replace": "        let model_providers =\n            merge_configured_model_providers(built_in_model_providers(openai_base_url), cfg.model_providers)\n                .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidData, message))?;\n\n        let reconnect = cfg.reconnect.unwrap_or_default();\n        if reconnect.mode == ReconnectMode::Fixed && reconnect.interval_ms.is_none_or(|ms| ms == 0) {\n            return Err(std::io::Error::new(\n                std::io::ErrorKind::InvalidInput,\n                \"reconnect.mode = \\\"fixed\\\" requires reconnect.interval_ms to be greater than zero\",\n            ));\n        }\n        let model_providers = match reconnect.max_retries {\n            Some(max_retries) => model_providers\n                .into_iter()\n                .map(|(id, mut provider)| {\n                    provider.stream_max_retries = Some(max_retries);\n                    (id, provider)\n                })\n                .collect(),\n            None => model_providers,\n        };\n\n        let model_provider_id = config_layer_stack.required_model_provider().map(str::to_string)\n",
+      "find": "        if let Some(provider) = model_providers.get_mut(GCP_PROVIDER_ID) {\n            apply_default_gcp_auth(provider, &resolved_cwd);\n        }\n\n        let model_provider_id = config_layer_stack.required_model_provider().map(str::to_string)\n",
+      "replace": "        if let Some(provider) = model_providers.get_mut(GCP_PROVIDER_ID) {\n            apply_default_gcp_auth(provider, &resolved_cwd);\n        }\n\n        let reconnect = cfg.reconnect.unwrap_or_default();\n        if reconnect.mode == ReconnectMode::Fixed && reconnect.interval_ms.is_none_or(|ms| ms == 0) {\n            return Err(std::io::Error::new(\n                std::io::ErrorKind::InvalidInput,\n                \"reconnect.mode = \\\"fixed\\\" requires reconnect.interval_ms to be greater than zero\",\n            ));\n        }\n\n        let model_provider_id = config_layer_stack.required_model_provider().map(str::to_string)\n",
       "expect": 1
     },
     {
@@ -99,14 +99,14 @@
     },
     {
       "file": "codex-rs/tui/src/slash_command.rs",
-      "find": "                | SlashCommand::Resume\n        )\n",
-      "replace": "                | SlashCommand::Resume\n                | SlashCommand::Reconnect\n        )\n",
+      "find": "                | SlashCommand::Resume\n                | SlashCommand::Rc\n        )\n",
+      "replace": "                | SlashCommand::Resume\n                | SlashCommand::Rc\n                | SlashCommand::Reconnect\n        )\n",
       "expect": 1
     },
     {
       "file": "codex-rs/tui/src/slash_command.rs",
-      "find": "                | SlashCommand::Ide\n        )\n",
-      "replace": "                | SlashCommand::Ide\n                | SlashCommand::Reconnect\n        )\n",
+      "find": "                | SlashCommand::Ide\n                | SlashCommand::Rename\n        )\n",
+      "replace": "                | SlashCommand::Ide\n                | SlashCommand::Rename\n                | SlashCommand::Reconnect\n        )\n",
       "expect": 1
     },
     {

@@ -1,6 +1,6 @@
 {
   "name": "runtime-console",
-  "description": "Process-only reconnect controls; Windows console fixes are supplied by upstream v0.163.0.",
+  "description": "Process-only reconnect controls; Windows console fixes are supplied by upstream v0.172.0.",
   "edits": [
     {
       "file": "codex-rs/config/src/lib.rs",
@@ -21,26 +21,20 @@
     },
     {
       "file": "codex-rs/core/config.schema.json",
-      "find": "      \"default\": null,\n      \"description\": \"Experimental / do not use. Realtime websocket session selection. `version` controls v1/v2 and `type` controls conversational/transcription.\"\n    },\n    \"responses_api_metadata\": {\n      \"additionalProperties\": {\n        \"type\": \"string\"\n",
-      "replace": "      \"default\": null,\n      \"description\": \"Experimental / do not use. Realtime websocket session selection. `version` controls v1/v2 and `type` controls conversational/transcription.\"\n    },\n    \"reconnect\": {\n      \"allOf\": [\n        {\n          \"$ref\": \"#/definitions/ReconnectConfigToml\"\n        }\n      ],\n      \"description\": \"Overrides for model stream reconnect timing and retry budget.\"\n    },\n    \"responses_api_metadata\": {\n      \"additionalProperties\": {\n        \"type\": \"string\"\n",
+      "find": "    \"responses\": {\n",
+      "replace": "    \"reconnect\": {\n      \"allOf\": [\n        {\n          \"$ref\": \"#/definitions/ReconnectConfigToml\"\n        }\n      ],\n      \"description\": \"Overrides for model stream reconnect timing and retry budget.\"\n    },\n    \"responses\": {\n",
       "expect": 1
     },
     {
       "file": "codex-rs/core/src/compact.rs",
-      "find": "        turn_context.model_info().truncation_policy.into(),\n    );\n\n    let max_retries = turn_context.provider.info().stream_max_retries();\n    let mut retries = 0;\n    // Reuse one client session so turn-scoped state (sticky routing and websocket incremental\n    // request tracking) survives retries within this compact turn.\n",
-      "replace": "        turn_context.model_info().truncation_policy.into(),\n    );\n\n    let max_retries = codex_config::reconnect_retry_budget(\n        turn_context.config.reconnect,\n        turn_context.provider.info().stream_max_retries(),\n    );\n    let mut retries = 0;\n    // Reuse one client session so turn-scoped state (sticky routing and websocket incremental\n    // request tracking) survives retries within this compact turn.\n",
+      "find": "    let max_retries = turn_context.provider.info().stream_max_retries();\n",
+      "replace": "    let max_retries = codex_config::reconnect_retry_budget(\n        turn_context.config.reconnect,\n        turn_context.provider.info().stream_max_retries(),\n    );\n",
       "expect": 1
     },
     {
       "file": "codex-rs/core/src/compact_remote_v2.rs",
       "find": "    let max_retries = turn_context\n        .provider\n        .info()\n        .stream_max_retries()\n        .min(MAX_REMOTE_COMPACTION_V2_STREAM_RETRIES);\n",
       "replace": "    let max_retries = codex_config::reconnect_retry_budget(\n        turn_context.config.reconnect,\n        turn_context.provider.info().stream_max_retries(),\n    )\n    .min(MAX_REMOTE_COMPACTION_V2_STREAM_RETRIES);\n",
-      "expect": 1
-    },
-    {
-      "file": "codex-rs/core/src/config/mod.rs",
-      "find": "                \"reconnect.mode = \\\"fixed\\\" requires reconnect.interval_ms to be greater than zero\",\n            ));\n        }\n        let model_providers = match reconnect.max_retries {\n            Some(max_retries) => model_providers\n                .into_iter()\n                .map(|(id, mut provider)| {\n                    provider.stream_max_retries = Some(max_retries);\n                    (id, provider)\n                })\n                .collect(),\n            None => model_providers,\n        };\n\n        let model_provider_id = config_layer_stack.required_model_provider().map(str::to_string)\n            .or(model_provider)\n",
-      "replace": "                \"reconnect.mode = \\\"fixed\\\" requires reconnect.interval_ms to be greater than zero\",\n            ));\n        }\n\n        let model_provider_id = config_layer_stack.required_model_provider().map(str::to_string)\n            .or(model_provider)\n",
       "expect": 1
     },
     {
